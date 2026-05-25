@@ -1,5 +1,5 @@
 use crate::{
-    drafters::DraftSequence,
+    drafters::{DraftSequence, Drafter},
     model::{ModelError, ModelResult, TokenId},
 };
 
@@ -98,13 +98,45 @@ pub trait TargetFeatureExtractor {
     fn extract_target_features(&mut self, prefix: &[TokenId]) -> ModelResult<TargetFeatureWindow>;
 }
 
+#[derive(Debug, Clone)]
+pub struct FeatureConditionedDrafter<E, B> {
+    extractor: E,
+    block_drafter: B,
+}
+
+impl<E, B> FeatureConditionedDrafter<E, B> {
+    pub fn new(extractor: E, block_drafter: B) -> Self {
+        Self {
+            extractor,
+            block_drafter,
+        }
+    }
+
+    pub fn into_parts(self) -> (E, B) {
+        (self.extractor, self.block_drafter)
+    }
+}
+
+impl<E, B> Drafter for FeatureConditionedDrafter<E, B>
+where
+    E: TargetFeatureExtractor,
+    B: BlockDrafter,
+{
+    fn draft(&mut self, prefix: &[TokenId], max_tokens: usize) -> ModelResult<DraftSequence> {
+        let features = self.extractor.extract_target_features(prefix)?;
+        let request = BlockDraftRequest::new(prefix, &features, max_tokens)?;
+        self.block_drafter.draft_block(request)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
         block_draft::{
-            BlockDraftRequest, BlockDrafter, TargetFeatureExtractor, TargetFeatureWindow,
+            BlockDraftRequest, BlockDrafter, FeatureConditionedDrafter, TargetFeatureExtractor,
+            TargetFeatureWindow,
         },
-        drafters::DraftSequence,
+        drafters::{DraftSequence, Drafter},
         model::{ModelError, TokenId},
     };
 
@@ -233,6 +265,20 @@ mod tests {
         assert_eq!(request.target_features.width(), 2);
         assert_eq!(request.target_features.row(0), Some(&[3.0, 3.5][..]));
         assert_eq!(request.target_features.row(1), Some(&[4.0, 4.5][..]));
+    }
+
+    #[test]
+    fn adapter_uses_extracted_features_for_drafter_trait() {
+        let extractor = PrefixFeatureExtractor;
+        let block_drafter = RecordingBlockDrafter::new();
+        let mut drafter = FeatureConditionedDrafter::new(extractor, block_drafter);
+
+        let draft = drafter.draft(&[2, 4, 6], 2).expect("draft");
+        let (_, block_drafter) = drafter.into_parts();
+
+        assert_eq!(draft.as_slice(), &[6, 4]);
+        assert_eq!(block_drafter.seen_last, Some(6));
+        assert_eq!(block_drafter.seen_width, 2);
     }
 
     #[test]
