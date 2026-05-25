@@ -4,6 +4,7 @@ use crate::{
     weight_metadata::read_gguf_file_metadata,
 };
 
+#[cfg(feature = "safetensors")]
 const EMBEDDING_TENSOR_NAMES: &[&str] = &[
     "model.embed_tokens.weight",
     "model.model.embed_tokens.weight",
@@ -81,6 +82,7 @@ pub fn validate_candle_runtime_weights(_plan: &AdapterTargetRuntimePlan) -> Mode
     ))
 }
 
+#[cfg(feature = "safetensors")]
 fn required_usize(value: Option<usize>, message: &'static str) -> ModelResult<usize> {
     value.ok_or(ModelError::InvalidConfig(message))
 }
@@ -128,8 +130,7 @@ mod tests {
             let weights_path = root.join(weight_name);
 
             write(&config_path, config).expect("config should be written");
-            write(&tokenizer, r#"{"model":{"type":"BPE"}}"#)
-                .expect("tokenizer should be written");
+            write(&tokenizer, r#"{"model":{"type":"BPE"}}"#).expect("tokenizer should be written");
             write(&weights_path, weights).expect("weights should be written");
 
             Self {
@@ -167,8 +168,8 @@ mod tests {
     fn valid_config() -> &'static str {
         r#"{
             "model_type": "llama",
-            "vocab_size": 32000,
-            "hidden_size": 4096,
+            "vocab_size": 2,
+            "hidden_size": 4,
             "num_hidden_layers": 32
         }"#
     }
@@ -184,41 +185,35 @@ mod tests {
 
     #[cfg(feature = "safetensors")]
     fn safetensors_bytes(tensor_name: &str, shape: &[usize]) -> Vec<u8> {
+        let data_bytes = shape.iter().product::<usize>() * 4;
         let shape = shape
             .iter()
             .map(usize::to_string)
             .collect::<Vec<_>>()
             .join(",");
         let header = format!(
-            r#"{{"{tensor_name}":{{"dtype":"F32","shape":[{shape}],"data_offsets":[0,8]}}}}"#
+            r#"{{"{tensor_name}":{{"dtype":"F32","shape":[{shape}],"data_offsets":[0,{data_bytes}]}}}}"#
         );
         let mut bytes = Vec::new();
         bytes.extend((header.len() as u64).to_le_bytes());
         bytes.extend(header.as_bytes());
-        bytes.extend([0_u8; 8]);
+        bytes.extend(vec![0_u8; data_bytes]);
         bytes
     }
 
     #[test]
     fn validates_gguf_weight_headers() {
-        let assets = TempAssets::new(
-            "gguf-valid",
-            "model.gguf",
-            valid_config(),
-            gguf_bytes(12),
-        );
+        let assets = TempAssets::new("gguf-valid", "model.gguf", valid_config(), gguf_bytes(12));
 
-        assert_eq!(validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)), Ok(()));
+        assert_eq!(
+            validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
+            Ok(())
+        );
     }
 
     #[test]
     fn rejects_empty_gguf_weight_headers() {
-        let assets = TempAssets::new(
-            "gguf-empty",
-            "model.gguf",
-            valid_config(),
-            gguf_bytes(0),
-        );
+        let assets = TempAssets::new("gguf-empty", "model.gguf", valid_config(), gguf_bytes(0));
 
         assert_eq!(
             validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
@@ -235,7 +230,7 @@ mod tests {
             "candle-valid",
             "model.safetensors",
             valid_config(),
-            safetensors_bytes("model.embed_tokens.weight", &[32000, 4096]),
+            safetensors_bytes("model.embed_tokens.weight", &[2, 4]),
         );
 
         assert_eq!(
@@ -251,7 +246,7 @@ mod tests {
             "candle-mismatch",
             "model.safetensors",
             valid_config(),
-            safetensors_bytes("model.embed_tokens.weight", &[100, 4096]),
+            safetensors_bytes("model.embed_tokens.weight", &[3, 4]),
         );
 
         assert_eq!(
@@ -269,7 +264,7 @@ mod tests {
             "candle-missing",
             "model.safetensors",
             valid_config(),
-            safetensors_bytes("other.weight", &[32000, 4096]),
+            safetensors_bytes("other.weight", &[2, 4]),
         );
 
         assert_eq!(
