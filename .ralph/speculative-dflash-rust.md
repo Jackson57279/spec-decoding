@@ -34,6 +34,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 17: Added `AdapterTargetPlaceholder` in `src/adapter_loaded.rs`, deriving model type and vocab size from parsed model/tokenizer metadata while implementing `TargetModel` with explicit logits failure until a real inference backend is wired in. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 18: Added optional `tokenizers` support with a feature-gated `AdapterJsonTokenizer` in `src/adapter_loaded.rs`, loading Hugging Face tokenizer JSON and implementing the existing `Tokenizer` trait for real encode/decode smoke coverage. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 19: Threaded the feature-gated tokenizer runtime through `AdapterLoaderShell` helpers in `src/adapter_loaded.rs`, returning metadata target placeholders paired with real Hugging Face JSON tokenizer runtimes for target-only and target-plus-draft requests. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 20: Added optional `safetensors` support plus `src/weight_metadata.rs` for feature-gated safetensors header inspection, returning tensor names, dtypes, shapes, data byte counts, and user metadata counts without loading tensor data into model runtimes. Exported it from `src/lib.rs`. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -57,7 +58,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Working well: The loader path is now more than extension validation: it can check files, parse lightweight JSON, and verify adapter/format compatibility before heavy inference dependencies are involved. Local and remote checks pass with 59 tests.
 - Blocking or weak spots: The project still has no real model weights reader, tokenizer implementation beyond byte-level smoke tests, or Candle/GGUF target model implementation. Dependency scope will start to matter soon.
 - Approach adjustment: Keep one more layer of dependency-light preflight around load requests, then add the first real optional dependency only when a minimal end-to-end adapter smoke test needs it.
-- Next priorities: Add the first feature-gated weight metadata reader so adapter preflight can inspect safetensors/GGUF weight headers before real target logits are implemented.
+- Next priorities: Wire safetensors metadata summaries into adapter preflight reports, then add a matching lightweight GGUF metadata reader.
 
 ## Continuation Reflection 4
 
@@ -65,7 +66,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Working well: Keeping the implementation dependency-free has preserved fast local and remote verification while sharpening the boundaries needed for full target-model speculative decoding. The current placeholders make unsupported inference/tokenizer behavior fail explicitly instead of pretending to work.
 - Blocking or weak spots: There is still no real tokenizer JSON runtime, no target logits implementation, no safetensors/GGUF reader, and no true KV-cache-backed adapter. The adapter surface is ready, but correctness still depends on test doubles and metadata validation rather than real model execution.
 - Approach adjustment: Add one more explicit target-model placeholder so model metadata can sit behind the `TargetModel` trait, then move to carefully selected optional dependencies for tokenizer and weight loading.
-- Next priorities: Add the first feature-gated weight metadata reader so adapter preflight can inspect safetensors/GGUF weight headers before real target logits are implemented.
+- Next priorities: Wire safetensors metadata summaries into adapter preflight reports, then add a matching lightweight GGUF metadata reader.
 
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
