@@ -120,6 +120,13 @@ impl LlamaCppGgufLogitsEngine {
 struct LlamaCppModelContextLoader {
     model_path: PathBuf,
     vocab_size: usize,
+    mode: LlamaCppEvaluationMode,
+}
+
+#[cfg(feature = "gguf-llama-cpp")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlamaCppEvaluationMode {
+    OneShot,
 }
 
 #[cfg(feature = "gguf-llama-cpp")]
@@ -132,7 +139,12 @@ impl LlamaCppModelContextLoader {
         Ok(Self {
             model_path: weight.path.clone(),
             vocab_size: plan.vocab_size,
+            mode: LlamaCppEvaluationMode::OneShot,
         })
+    }
+
+    fn evaluation_mode(&self) -> LlamaCppEvaluationMode {
+        self.mode
     }
 
     fn model_params(&self) -> llama_cpp_2::model::params::LlamaModelParams {
@@ -153,6 +165,12 @@ impl LlamaCppModelContextLoader {
     }
 
     fn logits_for_prefix(&self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+        match self.evaluation_mode() {
+            LlamaCppEvaluationMode::OneShot => self.logits_for_prefix_one_shot(prefix),
+        }
+    }
+
+    fn logits_for_prefix_one_shot(&self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
         if prefix.is_empty() {
             return Err(ModelError::InvalidConfig(
                 "gguf llama.cpp prefix must not be empty",
@@ -384,6 +402,10 @@ mod tests {
                 assert_bound_plan(&engine.plan);
                 assert_eq!(engine.loader.model_path, PathBuf::from("/tmp/model.gguf"));
                 assert_eq!(engine.loader.vocab_size, 2);
+                assert_eq!(
+                    engine.loader.evaluation_mode(),
+                    super::LlamaCppEvaluationMode::OneShot
+                );
             }
             #[cfg(not(feature = "gguf-llama-cpp"))]
             super::GgufLogitsEngine::PlanBound(engine) => {
