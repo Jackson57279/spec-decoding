@@ -12,6 +12,13 @@ use crate::model::ModelError;
 const CONFIG_ENV: &str = "SPECLATIVE_DIFFUSION_GGUF_SMOKE_CONFIG";
 const TOKENIZER_ENV: &str = "SPECLATIVE_DIFFUSION_GGUF_SMOKE_TOKENIZER";
 const WEIGHTS_ENV: &str = "SPECLATIVE_DIFFUSION_GGUF_SMOKE_WEIGHTS";
+const REAL_GGUF_SMOKE_COMMAND: &str = concat!(
+    "SPECLATIVE_DIFFUSION_GGUF_SMOKE_CONFIG=/path/to/config.json ",
+    "SPECLATIVE_DIFFUSION_GGUF_SMOKE_TOKENIZER=/path/to/tokenizer.json ",
+    "SPECLATIVE_DIFFUSION_GGUF_SMOKE_WEIGHTS=/path/to/model.gguf ",
+    "sfw cargo test -q --features gguf-llama-cpp ",
+    "env_gated_gguf_backend_smoke_binds_real_assets"
+);
 
 #[test]
 fn env_gated_gguf_backend_smoke_binds_real_assets() {
@@ -62,4 +69,14 @@ fn smoke_paths_from_env() -> Option<ModelAssetPaths> {
 
 fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name).map(PathBuf::from)
+}
+
+#[test]
+#[ignore = "prints the opt-in command for running the real GGUF smoke harness"]
+fn prints_real_gguf_smoke_command() {
+    assert!(REAL_GGUF_SMOKE_COMMAND.contains(CONFIG_ENV));
+    assert!(REAL_GGUF_SMOKE_COMMAND.contains(TOKENIZER_ENV));
+    assert!(REAL_GGUF_SMOKE_COMMAND.contains(WEIGHTS_ENV));
+
+    println!("{REAL_GGUF_SMOKE_COMMAND}");
 }
