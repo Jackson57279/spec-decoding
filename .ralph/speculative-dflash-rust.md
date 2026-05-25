@@ -47,6 +47,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 31: Added `src/gguf_runtime_logits.rs`, a feature-gated GGUF logits-engine boundary that validates logits length against runtime vocab size and gives the GGUF backend a replaceable path for real evaluator output instead of hardcoding logits failure in `src/adapter_runtime_backend.rs`. The backend still defaults to an explicit unconfigured-engine error, while tests can inject static logits to verify `TargetModel` routing and token range checks. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 32: Made `GgufRuntimeLogits` plan-bound by capturing model type, vocab size, hidden size, layer count, GGUF metadata summaries, and weight paths from `AdapterTargetRuntimePlan`. The GGUF backend now constructs its logits engine from the same validated runtime plan it uses for target construction, and the explicit fallback error now means evaluator-not-implemented rather than unconfigured. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 33: Added `src/gguf_runtime_smoke.rs`, an env-gated GGUF backend smoke harness registered only for `#[cfg(all(test, feature = "gguf"))]`. When `SPECLATIVE_DIFFUSION_GGUF_SMOKE_CONFIG`, `SPECLATIVE_DIFFUSION_GGUF_SMOKE_TOKENIZER`, and `SPECLATIVE_DIFFUSION_GGUF_SMOKE_WEIGHTS` are set, it builds a real GGUF backend bundle from those assets, checks the weight path binding, and records the current evaluator-not-implemented logits boundary. Without those env vars it returns early, keeping normal verification lightweight. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 34: Chose llama.cpp as the concrete GGUF evaluator strategy and added a lightweight `gguf-llama-cpp` feature gate that depends on `gguf` but does not yet pull native bindings into normal or all-feature verification. `GgufRuntimeLogits` now selects a llama.cpp-specific evaluator path when that feature is enabled, preserving the same evaluator-not-implemented boundary until the optional dependency is linked. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, `sfw cargo test -q --features gguf-llama-cpp`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, `cargo test -q --features gguf-llama-cpp`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -136,11 +137,20 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Use the smoke harness as the acceptance boundary for the next evaluator implementation, flipping its assertion from the current error to finite `vocab_size` logits once real compute exists.
 - Next priorities: Choose and wire the concrete GGUF evaluator strategy behind `GgufRuntimeLogits`.
 
+## Continuation Reflection 12
+
+- Accomplished: The evaluator strategy is no longer ambiguous: GGUF real execution will go through a `gguf-llama-cpp` path, selected inside `GgufRuntimeLogits` while plain `gguf` remains dependency-light.
+- Working well: The new feature gate compiles locally and remotely, and `--all-features` still remains fast because native llama.cpp bindings are not linked yet.
+- Blocking or weak spots: The feature gate is only a selected path today; it still returns the evaluator-not-implemented error. The next step must add the optional `llama-cpp-2` dependency and convert the selected path into real model/context evaluation.
+- Approach adjustment: Link native bindings only behind `gguf-llama-cpp`, then decide whether `--all-features` should keep compiling that heavy path or whether verification should use explicit feature sets.
+- Next priorities: Add the optional `llama-cpp-2` dependency behind `gguf-llama-cpp` and map the plan-bound metadata into a first real model/context loader.
+
 Next priorities:
-1. Choose and wire a concrete GGUF evaluator behind `GgufRuntimeLogits`, then flip the env-gated smoke test to assert finite logits and vocab length.
-2. Expand GGUF tensor/data loading only where the first real backend needs it, including dtype/data-offset validation.
-3. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
-4. Add KV-cache-aware target inference shape and batched verification abstractions.
-5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
-6. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
-7. Keep tests focused, run local and remote verification each implementation iteration, and update the Ralph task file with progress/reflections.
+1. Add the optional `llama-cpp-2` dependency behind `gguf-llama-cpp` and map `PlanBoundGgufLogitsEngine` into a real model/context loader.
+2. Flip the env-gated GGUF smoke test to assert finite logits and vocab length once the llama.cpp path can evaluate a prefix.
+3. Expand GGUF tensor/data loading only where the first real backend needs it, including dtype/data-offset validation.
+4. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
+5. Add KV-cache-aware target inference shape and batched verification abstractions.
+6. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
+7. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
+8. Keep tests focused, run local and remote verification each implementation iteration, and update the Ralph task file with progress/reflections.
