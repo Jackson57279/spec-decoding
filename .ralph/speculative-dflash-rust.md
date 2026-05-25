@@ -56,6 +56,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Keep one more layer of dependency-light preflight around load requests, then add the first real optional dependency only when a minimal end-to-end adapter smoke test needs it.
 - Next priorities: Add a dependency-free target-model placeholder that reports model metadata and fails inference explicitly, then replace metadata placeholders with real tokenizer/model implementations once adapter dependencies are selected.
 
+## Continuation Reflection 4
+
+- Accomplished: The adapter path now reaches metadata-only loaded bundles: load requests can be validated, summarized, routed through Candle/GGUF shells, and converted into typed target/draft metadata handles with tokenizer metadata placeholders.
+- Working well: Keeping the implementation dependency-free has preserved fast local and remote verification while sharpening the boundaries needed for full target-model speculative decoding. The current placeholders make unsupported inference/tokenizer behavior fail explicitly instead of pretending to work.
+- Blocking or weak spots: There is still no real tokenizer JSON runtime, no target logits implementation, no safetensors/GGUF reader, and no true KV-cache-backed adapter. The adapter surface is ready, but correctness still depends on test doubles and metadata validation rather than real model execution.
+- Approach adjustment: Add one more explicit target-model placeholder so model metadata can sit behind the `TargetModel` trait, then move to carefully selected optional dependencies for tokenizer and weight loading.
+- Next priorities: Add a dependency-free target-model placeholder that reports model metadata and fails inference explicitly, then replace metadata placeholders with real tokenizer/model implementations once adapter dependencies are selected.
+
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
 2. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`.
