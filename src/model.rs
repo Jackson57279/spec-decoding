@@ -83,6 +83,41 @@ pub trait TargetModel {
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>>;
 }
 
+pub trait Tokenizer {
+    fn vocab_size(&self) -> usize;
+    fn encode(&self, text: &str) -> ModelResult<TokenSequence>;
+    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String>;
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ByteTokenizer;
+
+impl Tokenizer for ByteTokenizer {
+    fn vocab_size(&self) -> usize {
+        256
+    }
+
+    fn encode(&self, text: &str) -> ModelResult<TokenSequence> {
+        Ok(TokenSequence::new(
+            text.as_bytes().iter().copied().map(TokenId::from).collect(),
+        ))
+    }
+
+    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String> {
+        let mut bytes = Vec::with_capacity(tokens.len());
+
+        for (index, token) in tokens.iter().copied().enumerate() {
+            let byte = token
+                .try_into()
+                .map_err(|_| ModelError::TokenOutOfRange { index })?;
+            bytes.push(byte);
+        }
+
+        String::from_utf8(bytes)
+            .map_err(|_| ModelError::InvalidConfig("tokens must decode to valid UTF-8"))
+    }
+}
+
 pub fn greedy_token(logits: &[f32]) -> ModelResult<TokenId> {
     let mut best = None;
 
@@ -105,7 +140,7 @@ pub fn greedy_token(logits: &[f32]) -> ModelResult<TokenId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GenerationConfig, ModelError, greedy_token};
+    use super::{ByteTokenizer, GenerationConfig, ModelError, Tokenizer, greedy_token};
 
     #[test]
     fn validates_greedy_generation_config() {
@@ -145,6 +180,29 @@ mod tests {
         assert_eq!(
             greedy_token(&[0.0, f32::NAN]),
             Err(ModelError::InvalidLogit { index: 1 })
+        );
+    }
+
+    #[test]
+    fn byte_tokenizer_round_trips_utf8_text() {
+        let tokenizer = ByteTokenizer;
+        let encoded = tokenizer.encode("draft").expect("text should encode");
+
+        assert_eq!(tokenizer.vocab_size(), 256);
+        assert_eq!(encoded.as_slice(), &[100, 114, 97, 102, 116]);
+        assert_eq!(
+            tokenizer.decode(encoded.as_slice()),
+            Ok(String::from("draft"))
+        );
+    }
+
+    #[test]
+    fn byte_tokenizer_rejects_out_of_range_token() {
+        let tokenizer = ByteTokenizer;
+
+        assert_eq!(
+            tokenizer.decode(&[256]),
+            Err(ModelError::TokenOutOfRange { index: 0 })
         );
     }
 }
