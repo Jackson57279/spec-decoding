@@ -68,6 +68,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Add one more explicit target-model placeholder so model metadata can sit behind the `TargetModel` trait, then move to carefully selected optional dependencies for tokenizer and weight loading.
 - Next priorities: Wire safetensors metadata summaries into adapter preflight reports, then add a matching lightweight GGUF metadata reader.
 
+## Continuation Reflection 5
+
+- Accomplished: The project has moved from pure control-plane scaffolding into feature-gated real asset readers: Hugging Face tokenizer JSON can now be loaded behind `tokenizers`, and safetensors headers can be inspected behind `safetensors`.
+- Working well: Default builds remain lean while `--all-features` exercises the heavier optional paths. The adapter shell can now validate assets, summarize configs/tokenizers, return real tokenizer runtimes, and inspect safetensors metadata without claiming target logits support.
+- Blocking or weak spots: The safetensors reader is not yet wired into adapter preflight reports, GGUF metadata is still only extension-level, and target inference is still a placeholder that deliberately fails logits calls. This means the runtime can inspect real assets but still cannot execute a target model.
+- Approach adjustment: Keep feature-gated readers independent and small, then thread their summaries into preflight in a way that preserves default builds and keeps GGUF/Candle support separable.
+- Next priorities: Wire safetensors metadata summaries into adapter preflight reports, then add a matching lightweight GGUF metadata reader.
+
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
 2. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`.
