@@ -386,8 +386,8 @@ mod tests {
         let plan = assets.runtime_plan();
         let mut target = AdapterRuntimeTargetPlaceholder::from_runtime_plan(&plan)
             .expect("target should be built");
-        let batch = TargetBatch::new(vec![TokenSequence::new(vec![0])])
-            .expect("batch should be valid");
+        let batch =
+            TargetBatch::new(vec![TokenSequence::new(vec![0])]).expect("batch should be valid");
 
         assert_eq!(
             crate::model::BatchedTargetModel::logits_for_prefixes(&mut target, &batch),
