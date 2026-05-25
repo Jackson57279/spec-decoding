@@ -43,6 +43,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 27: Added loader-shell convenience methods in `src/adapter_runtime_plan.rs` and `src/adapter_runtime_target.rs` that chain weight-checked metadata loading into `AdapterRuntimePlanBundle` and `AdapterRuntimeTargetBundle` for target-only and target-plus-draft requests. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 28: Added `src/adapter_runtime_backend.rs` with feature-gated `candle` and `gguf` backend skeletons that consume `AdapterTargetRuntimePlan`, reuse runtime target validation, preserve planned weight paths, and fail logits with backend-specific messages until real inference is wired in. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 29: Added `src/adapter_runtime_weight_check.rs` and wired it into the feature-gated backend skeletons. Candle backends now reopen safetensors headers and validate a known embedding tensor shape against config metadata when `safetensors` is enabled, while GGUF backends reopen the dependency-free header metadata and reject empty tensor catalogs before constructing runtime targets. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 30: Added a dependency-free GGUF parser in `src/gguf_parse.rs` for architecture key-values and tensor-info tables, exposed parsed GGUF tensor metadata through `src/weight_metadata.rs`, carried the parsed counts into runtime plans, and made GGUF backend validation reject missing architecture metadata, config architecture mismatches, missing `token_embd.weight`, and embedding tensor shape mismatches before backend construction. Migrated GGUF fixtures away from fixed-header-only blobs. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -100,9 +101,17 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Extend the dependency-free GGUF parser just enough to read metadata key-values and tensor info next, then use those fields to mirror Candle's config-vs-weight shape checks before attempting real logits.
 - Next priorities: Add GGUF tensor-info and architecture metadata parsing for shape validation, then start the first real backend logits path behind the existing runtime-plan contract.
 
+## Continuation Reflection 8
+
+- Accomplished: GGUF validation now reads beyond the fixed header: architecture metadata and tensor-info shapes are available to runtime planning and backend-owned validation.
+- Working well: The GGUF path remains dependency-free, default and all-feature tests are green locally and remotely, and the stricter metadata fixtures make malformed GGUF coverage closer to real files.
+- Blocking or weak spots: The parser still only validates metadata needed for backend initialization. It does not map GGML tensor dtypes to byte sizes, load tensor data, or handle model-family-specific required tensor sets beyond `token_embd.weight`.
+- Approach adjustment: Keep expanding GGUF validation around real backend needs, but move the next iteration toward the first logits-capable backend path instead of adding broad unused parser surface.
+- Next priorities: Start a real backend logits path behind `AdapterTargetRuntimePlan`, then deepen GGUF tensor/data loading as that implementation needs it.
+
 Next priorities:
-1. Add GGUF tensor-info and architecture metadata parsing so the GGUF backend can validate config-vs-weight shapes before loading inference state.
-2. Introduce real Hugging Face/Candle or GGUF logits support behind the feature-gated backend skeletons, consuming `AdapterTargetRuntimePlan`.
+1. Introduce real Hugging Face/Candle or GGUF logits support behind the feature-gated backend skeletons, consuming `AdapterTargetRuntimePlan`.
+2. Expand GGUF tensor/data loading only where the first real backend needs it, including dtype/data-offset validation.
 3. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
 4. Add KV-cache-aware target inference shape and batched verification abstractions.
 5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
