@@ -180,6 +180,7 @@ mod tests {
         adapter_runtime_plan::AdapterTargetRuntimePlan,
         adapter_runtime_target::AdapterRuntimeTargetPlaceholder,
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_parse::test_gguf_bytes,
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::{ModelError, TargetBatch, TargetModel, TokenSequence},
     };
@@ -209,7 +210,11 @@ mod tests {
 
             write(&config_path, config).expect("config should be written");
             write(&tokenizer_path, tokenizer).expect("tokenizer should be written");
-            write(&weights, Self::gguf_bytes()).expect("weights should be written");
+            write(
+                &weights,
+                test_gguf_bytes(Some("llama"), "token_embd.weight", &[4096, 32000]),
+            )
+            .expect("weights should be written");
 
             Self {
                 root,
@@ -251,14 +256,6 @@ mod tests {
                 .expect("runtime plan should be built")
         }
 
-        fn gguf_bytes() -> Vec<u8> {
-            let mut bytes = Vec::new();
-            bytes.extend(b"GGUF");
-            bytes.extend(3_u32.to_le_bytes());
-            bytes.extend(12_u64.to_le_bytes());
-            bytes.extend(4_u64.to_le_bytes());
-            bytes
-        }
     }
 
     impl Drop for TempAssets {
