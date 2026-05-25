@@ -255,7 +255,6 @@ mod tests {
             AdapterTargetRuntimePlan::from_loaded_metadata(&loaded.target)
                 .expect("runtime plan should be built")
         }
-
     }
 
     impl Drop for TempAssets {

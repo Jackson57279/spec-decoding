@@ -60,11 +60,7 @@ pub(crate) fn parse_gguf_file(buffer: &[u8]) -> ModelResult<ParsedGgufFile> {
     })
 }
 
-fn read_metadata(
-    cursor: &mut usize,
-    buffer: &[u8],
-    count: u64,
-) -> ModelResult<Option<String>> {
+fn read_metadata(cursor: &mut usize, buffer: &[u8], count: u64) -> ModelResult<Option<String>> {
     let mut architecture = None;
     for _ in 0..count {
         let key = read_string(cursor, buffer)?;
@@ -87,7 +83,8 @@ fn read_tensor_infos(
     let mut tensors = Vec::with_capacity(count);
     for _ in 0..count {
         let name = read_string(cursor, buffer)?;
-        let dimension_count = usize::try_from(read_u32(cursor, buffer)?).map_err(|_| invalid_gguf())?;
+        let dimension_count =
+            usize::try_from(read_u32(cursor, buffer)?).map_err(|_| invalid_gguf())?;
         let mut shape = Vec::with_capacity(dimension_count);
         for _ in 0..dimension_count {
             shape.push(usize::try_from(read_u64(cursor, buffer)?).map_err(|_| invalid_gguf())?);
@@ -104,21 +101,12 @@ fn read_tensor_infos(
     Ok(tensors)
 }
 
-fn skip_value(
-    cursor: &mut usize,
-    buffer: &[u8],
-    value_type: u32,
-    depth: usize,
-) -> ModelResult<()> {
+fn skip_value(cursor: &mut usize, buffer: &[u8], value_type: u32, depth: usize) -> ModelResult<()> {
     match value_type {
         GGUF_VALUE_UINT8 | GGUF_VALUE_INT8 | GGUF_VALUE_BOOL => skip_bytes(cursor, buffer, 1),
         GGUF_VALUE_UINT16 | GGUF_VALUE_INT16 => skip_bytes(cursor, buffer, 2),
-        GGUF_VALUE_UINT32 | GGUF_VALUE_INT32 | GGUF_VALUE_FLOAT32 => {
-            skip_bytes(cursor, buffer, 4)
-        }
-        GGUF_VALUE_UINT64 | GGUF_VALUE_INT64 | GGUF_VALUE_FLOAT64 => {
-            skip_bytes(cursor, buffer, 8)
-        }
+        GGUF_VALUE_UINT32 | GGUF_VALUE_INT32 | GGUF_VALUE_FLOAT32 => skip_bytes(cursor, buffer, 4),
+        GGUF_VALUE_UINT64 | GGUF_VALUE_INT64 | GGUF_VALUE_FLOAT64 => skip_bytes(cursor, buffer, 8),
         GGUF_VALUE_STRING => read_string(cursor, buffer).map(|_| ()),
         GGUF_VALUE_ARRAY => {
             if depth >= MAX_ARRAY_DEPTH {

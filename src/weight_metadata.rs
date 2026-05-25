@@ -109,9 +109,7 @@ mod tests {
     };
 
     use crate::{
-        gguf_parse::test_gguf_bytes,
-        model::ModelError,
-        weight_metadata::read_gguf_file_metadata,
+        gguf_parse::test_gguf_bytes, model::ModelError, weight_metadata::read_gguf_file_metadata,
     };
 
     #[cfg(feature = "safetensors")]

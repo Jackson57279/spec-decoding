@@ -256,7 +256,6 @@ mod tests {
             )
             .expect("asset paths should be valid")
         }
-
     }
 
     impl Drop for TempAssets {
