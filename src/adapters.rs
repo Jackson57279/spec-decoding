@@ -1,5 +1,9 @@
-use crate::loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat};
-use crate::model::{ModelError, ModelResult};
+use crate::{
+    asset_files::validate_model_asset_files,
+    config::{ModelAssetSummary, read_model_asset_summary},
+    loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
+    model::{ModelError, ModelResult},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdapterKind {
@@ -86,6 +90,59 @@ impl AdapterLoadPlan {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterModelPreflight {
+    pub plan: AdapterModelPlan,
+    pub summary: ModelAssetSummary,
+}
+
+impl AdapterModelPreflight {
+    pub fn new(kind: AdapterKind, assets: &ModelAssetPaths) -> ModelResult<Self> {
+        validate_model_asset_files(assets)?;
+
+        Ok(Self {
+            plan: AdapterModelPlan::new(kind, assets)?,
+            summary: read_model_asset_summary(assets)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterLoadPreflight {
+    pub target: AdapterModelPreflight,
+    pub draft: Option<AdapterModelPreflight>,
+}
+
+impl AdapterLoadPreflight {
+    pub fn target_only(target_kind: AdapterKind, request: &ModelLoadRequest) -> ModelResult<Self> {
+        if request.has_draft() {
+            return Err(ModelError::InvalidConfig(
+                "target-only adapter preflight must not include draft assets",
+            ));
+        }
+
+        Ok(Self {
+            target: AdapterModelPreflight::new(target_kind, &request.target)?,
+            draft: None,
+        })
+    }
+
+    pub fn with_draft(
+        target_kind: AdapterKind,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<Self> {
+        let draft = request.draft.as_ref().ok_or(ModelError::InvalidConfig(
+            "draft adapter preflight requires draft assets",
+        ))?;
+
+        Ok(Self {
+            target: AdapterModelPreflight::new(target_kind, &request.target)?,
+            draft: Some(AdapterModelPreflight::new(draft_kind, draft)?),
+        })
+    }
+}
+
 #[cfg(feature = "candle")]
 pub mod candle {
     use crate::adapters::AdapterKind;
@@ -102,10 +159,14 @@ pub mod gguf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{
+        fs::{File, create_dir_all, remove_dir_all, write},
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use crate::{
-        adapters::{AdapterKind, AdapterLoadPlan, AdapterModelPlan},
+        adapters::{AdapterKind, AdapterLoadPlan, AdapterLoadPreflight, AdapterModelPlan},
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::{ModelError, ModelResult},
     };
@@ -116,6 +177,77 @@ mod tests {
             "/models/qwen/tokenizer.json",
             vec![PathBuf::from(weight_file)],
         )
+    }
+
+    struct TempAssets {
+        root: PathBuf,
+        config: PathBuf,
+        tokenizer: PathBuf,
+        weights: PathBuf,
+    }
+
+    impl TempAssets {
+        fn new(name: &str, weight_name: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "speclative-diffusion-adapter-{name}-{}-{unique}",
+                std::process::id()
+            ));
+            create_dir_all(&root).expect("temp dir should be created");
+            let config = root.join("config.json");
+            let tokenizer = root.join("tokenizer.json");
+            let weights = root.join(weight_name);
+
+            write(
+                &config,
+                r#"{
+                    "model_type": "llama",
+                    "vocab_size": 32000,
+                    "hidden_size": 4096,
+                    "num_hidden_layers": 32
+                }"#,
+            )
+            .expect("config should be written");
+            write(
+                &tokenizer,
+                r#"{
+                    "model": {
+                        "type": "BPE",
+                        "vocab": {
+                            "hello": 0,
+                            "world": 1
+                        }
+                    }
+                }"#,
+            )
+            .expect("tokenizer should be written");
+            File::create(&weights).expect("weights should be created");
+
+            Self {
+                root,
+                config,
+                tokenizer,
+                weights,
+            }
+        }
+
+        fn paths(&self) -> ModelAssetPaths {
+            ModelAssetPaths::new(
+                self.config.clone(),
+                self.tokenizer.clone(),
+                vec![self.weights.clone()],
+            )
+            .expect("asset paths should be valid")
+        }
+    }
+
+    impl Drop for TempAssets {
+        fn drop(&mut self) {
+            let _ = remove_dir_all(&self.root);
+        }
     }
 
     #[test]
@@ -204,6 +336,64 @@ mod tests {
             Err(ModelError::InvalidConfig(
                 "target-only adapter plan must not include draft assets"
             ))
+        );
+    }
+
+    #[test]
+    fn builds_adapter_load_preflight_with_asset_summaries() {
+        let target = TempAssets::new("target", "model.safetensors");
+        let draft = TempAssets::new("draft", "model.gguf");
+        let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+
+        let preflight =
+            AdapterLoadPreflight::with_draft(AdapterKind::Candle, AdapterKind::Gguf, &request)
+                .expect("preflight should pass");
+
+        assert_eq!(preflight.target.plan.kind, AdapterKind::Candle);
+        assert_eq!(
+            preflight.target.summary.model.model_type.as_deref(),
+            Some("llama")
+        );
+        assert_eq!(
+            preflight
+                .draft
+                .expect("draft preflight")
+                .summary
+                .weight_format,
+            WeightFormat::Gguf
+        );
+    }
+
+    #[test]
+    fn rejects_adapter_preflight_missing_files_and_shape_mismatches() {
+        let target = TempAssets::new("target-only", "model.safetensors");
+        let draft = TempAssets::new("draft-shape", "model.gguf");
+        let target_only = ModelLoadRequest::target_only(target.paths());
+        let with_draft = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+        let missing = ModelLoadRequest::target_only(
+            ModelAssetPaths::new(
+                "/missing/config.json",
+                "/missing/tokenizer.json",
+                vec![PathBuf::from("/missing/model.safetensors")],
+            )
+            .expect("missing paths still have valid extensions"),
+        );
+
+        assert_eq!(
+            AdapterLoadPreflight::with_draft(AdapterKind::Candle, AdapterKind::Gguf, &target_only),
+            Err(ModelError::InvalidConfig(
+                "draft adapter preflight requires draft assets"
+            ))
+        );
+        assert_eq!(
+            AdapterLoadPreflight::target_only(AdapterKind::Candle, &with_draft),
+            Err(ModelError::InvalidConfig(
+                "target-only adapter preflight must not include draft assets"
+            ))
+        );
+        assert_eq!(
+            AdapterLoadPreflight::target_only(AdapterKind::Candle, &missing),
+            Err(ModelError::InvalidConfig("config file must exist"))
         );
     }
 }
