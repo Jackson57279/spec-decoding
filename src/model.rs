@@ -227,8 +227,72 @@ where
 
 pub trait Tokenizer {
     fn vocab_size(&self) -> usize;
-    fn encode(&self, text: &str) -> ModelResult<TokenSequence>;
-    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String>;
+    fn encode_with_options(
+        &self,
+        text: &str,
+        options: TokenizerEncodeOptions,
+    ) -> ModelResult<TokenSequence>;
+    fn decode_with_options(
+        &self,
+        tokens: &[TokenId],
+        options: TokenizerDecodeOptions,
+    ) -> ModelResult<String>;
+
+    fn encode(&self, text: &str) -> ModelResult<TokenSequence> {
+        self.encode_with_options(text, TokenizerEncodeOptions::without_special_tokens())
+    }
+
+    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String> {
+        self.decode_with_options(tokens, TokenizerDecodeOptions::skip_special_tokens())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenizerEncodeOptions {
+    add_special_tokens: bool,
+}
+
+impl TokenizerEncodeOptions {
+    pub fn new(add_special_tokens: bool) -> Self {
+        Self { add_special_tokens }
+    }
+
+    pub fn with_special_tokens() -> Self {
+        Self::new(true)
+    }
+
+    pub fn without_special_tokens() -> Self {
+        Self::new(false)
+    }
+
+    pub fn add_special_tokens(&self) -> bool {
+        self.add_special_tokens
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenizerDecodeOptions {
+    skip_special_tokens: bool,
+}
+
+impl TokenizerDecodeOptions {
+    pub fn new(skip_special_tokens: bool) -> Self {
+        Self {
+            skip_special_tokens,
+        }
+    }
+
+    pub fn skip_special_tokens() -> Self {
+        Self::new(true)
+    }
+
+    pub fn preserve_special_tokens() -> Self {
+        Self::new(false)
+    }
+
+    pub fn skip_special_tokens_enabled(&self) -> bool {
+        self.skip_special_tokens
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -239,13 +303,21 @@ impl Tokenizer for ByteTokenizer {
         256
     }
 
-    fn encode(&self, text: &str) -> ModelResult<TokenSequence> {
+    fn encode_with_options(
+        &self,
+        text: &str,
+        _options: TokenizerEncodeOptions,
+    ) -> ModelResult<TokenSequence> {
         Ok(TokenSequence::new(
             text.as_bytes().iter().copied().map(TokenId::from).collect(),
         ))
     }
 
-    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String> {
+    fn decode_with_options(
+        &self,
+        tokens: &[TokenId],
+        _options: TokenizerDecodeOptions,
+    ) -> ModelResult<String> {
         let mut bytes = Vec::with_capacity(tokens.len());
 
         for (index, token) in tokens.iter().copied().enumerate() {
@@ -285,7 +357,7 @@ mod tests {
     use super::{
         BatchedTargetModel, ByteTokenizer, CachedTargetModel, CachedTargetRequest,
         GenerationConfig, KvCacheState, ModelError, ModelResult, TargetBatch, TargetModel, TokenId,
-        TokenSequence, Tokenizer, greedy_token,
+        TokenSequence, Tokenizer, TokenizerDecodeOptions, TokenizerEncodeOptions, greedy_token,
     };
 
     #[test]
@@ -338,6 +410,17 @@ mod tests {
         assert_eq!(encoded.as_slice(), &[100, 114, 97, 102, 116]);
         assert_eq!(
             tokenizer.decode(encoded.as_slice()),
+            Ok(String::from("draft"))
+        );
+        assert_eq!(
+            tokenizer.encode_with_options("draft", TokenizerEncodeOptions::with_special_tokens()),
+            Ok(encoded)
+        );
+        assert_eq!(
+            tokenizer.decode_with_options(
+                &[100, 114, 97, 102, 116],
+                TokenizerDecodeOptions::preserve_special_tokens(),
+            ),
             Ok(String::from("draft"))
         );
     }

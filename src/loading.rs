@@ -217,7 +217,10 @@ mod tests {
             LoadedModel, LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader,
             WeightFormat,
         },
-        model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
+        model::{
+            ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer,
+            TokenizerDecodeOptions, TokenizerEncodeOptions,
+        },
     };
 
     fn valid_assets() -> ModelAssetPaths {
@@ -374,11 +377,19 @@ mod tests {
             1
         }
 
-        fn encode(&self, _text: &str) -> ModelResult<TokenSequence> {
+        fn encode_with_options(
+            &self,
+            _text: &str,
+            _options: TokenizerEncodeOptions,
+        ) -> ModelResult<TokenSequence> {
             Ok(TokenSequence::new(Vec::new()))
         }
 
-        fn decode(&self, _tokens: &[TokenId]) -> ModelResult<String> {
+        fn decode_with_options(
+            &self,
+            _tokens: &[TokenId],
+            _options: TokenizerDecodeOptions,
+        ) -> ModelResult<String> {
             Ok(String::new())
         }
     }

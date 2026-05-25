@@ -8,7 +8,10 @@ use crate::{
     adapters::{AdapterKind, AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
     config::{ModelAssetSummary, ModelConfigSummary, TokenizerConfigSummary},
     loading::ModelLoadRequest,
-    model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
+    model::{
+        ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer,
+        TokenizerDecodeOptions, TokenizerEncodeOptions,
+    },
 };
 
 #[cfg(feature = "tokenizers")]
@@ -76,13 +79,21 @@ impl Tokenizer for AdapterTokenizerPlaceholder {
         self.summary.vocab_size.unwrap_or(0)
     }
 
-    fn encode(&self, _text: &str) -> ModelResult<TokenSequence> {
+    fn encode_with_options(
+        &self,
+        _text: &str,
+        _options: TokenizerEncodeOptions,
+    ) -> ModelResult<TokenSequence> {
         Err(ModelError::InvalidConfig(
             "metadata tokenizer cannot encode text",
         ))
     }
 
-    fn decode(&self, _tokens: &[TokenId]) -> ModelResult<String> {
+    fn decode_with_options(
+        &self,
+        _tokens: &[TokenId],
+        _options: TokenizerDecodeOptions,
+    ) -> ModelResult<String> {
         Err(ModelError::InvalidConfig(
             "metadata tokenizer cannot decode tokens",
         ))
@@ -110,18 +121,26 @@ impl Tokenizer for AdapterJsonTokenizer {
         self.inner.get_vocab_size(false)
     }
 
-    fn encode(&self, text: &str) -> ModelResult<TokenSequence> {
+    fn encode_with_options(
+        &self,
+        text: &str,
+        options: TokenizerEncodeOptions,
+    ) -> ModelResult<TokenSequence> {
         let encoding = self
             .inner
-            .encode(text, false)
+            .encode(text, options.add_special_tokens())
             .map_err(|_| ModelError::InvalidConfig("tokenizer backend failed to encode text"))?;
 
         Ok(TokenSequence::new(encoding.get_ids().to_vec()))
     }
 
-    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String> {
+    fn decode_with_options(
+        &self,
+        tokens: &[TokenId],
+        options: TokenizerDecodeOptions,
+    ) -> ModelResult<String> {
         self.inner
-            .decode(tokens, true)
+            .decode(tokens, options.skip_special_tokens_enabled())
             .map_err(|_| ModelError::InvalidConfig("tokenizer backend failed to decode tokens"))
     }
 }
@@ -551,7 +570,24 @@ mod tests {
         assert_eq!(tokenizer.vocab_size(), 3);
         assert_eq!(encoded.as_slice(), &[1, 2]);
         assert_eq!(
+            tokenizer
+                .encode_with_options(
+                    "hello world",
+                    crate::model::TokenizerEncodeOptions::with_special_tokens(),
+                )
+                .expect("text should encode")
+                .as_slice(),
+            &[1, 2]
+        );
+        assert_eq!(
             tokenizer.decode(encoded.as_slice()),
+            Ok(String::from("hello world"))
+        );
+        assert_eq!(
+            tokenizer.decode_with_options(
+                encoded.as_slice(),
+                crate::model::TokenizerDecodeOptions::preserve_special_tokens(),
+            ),
             Ok(String::from("hello world"))
         );
     }
