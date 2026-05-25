@@ -83,6 +83,78 @@ pub trait TargetModel {
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetBatch {
+    prefixes: Vec<TokenSequence>,
+}
+
+impl TargetBatch {
+    pub fn new(prefixes: Vec<TokenSequence>) -> ModelResult<Self> {
+        if prefixes.is_empty() {
+            return Err(ModelError::InvalidConfig(
+                "target batch must contain at least one prefix",
+            ));
+        }
+
+        Ok(Self { prefixes })
+    }
+
+    pub fn from_prefix_and_draft(
+        prefix: &[TokenId],
+        draft_tokens: &[TokenId],
+    ) -> ModelResult<Self> {
+        if draft_tokens.is_empty() {
+            return Err(ModelError::InvalidConfig(
+                "draft tokens must not be empty for target verification",
+            ));
+        }
+
+        let mut prefixes = Vec::with_capacity(draft_tokens.len());
+        let mut current = prefix.to_vec();
+
+        for token in draft_tokens {
+            prefixes.push(TokenSequence::new(current.clone()));
+            current.push(*token);
+        }
+
+        Self::new(prefixes)
+    }
+
+    pub fn as_slice(&self) -> &[TokenSequence] {
+        &self.prefixes
+    }
+
+    pub fn len(&self) -> usize {
+        self.prefixes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.prefixes.is_empty()
+    }
+}
+
+pub trait BatchedTargetModel {
+    fn vocab_size(&self) -> usize;
+    fn logits_for_prefixes(&mut self, batch: &TargetBatch) -> ModelResult<Vec<Vec<f32>>>;
+}
+
+impl<T> BatchedTargetModel for T
+where
+    T: TargetModel,
+{
+    fn vocab_size(&self) -> usize {
+        TargetModel::vocab_size(self)
+    }
+
+    fn logits_for_prefixes(&mut self, batch: &TargetBatch) -> ModelResult<Vec<Vec<f32>>> {
+        batch
+            .as_slice()
+            .iter()
+            .map(|prefix| self.logits_for_prefix(prefix.as_slice()))
+            .collect()
+    }
+}
+
 pub trait Tokenizer {
     fn vocab_size(&self) -> usize;
     fn encode(&self, text: &str) -> ModelResult<TokenSequence>;
@@ -140,7 +212,10 @@ pub fn greedy_token(logits: &[f32]) -> ModelResult<TokenId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ByteTokenizer, GenerationConfig, ModelError, Tokenizer, greedy_token};
+    use super::{
+        BatchedTargetModel, ByteTokenizer, GenerationConfig, ModelError, ModelResult, TargetBatch,
+        TargetModel, TokenId, TokenSequence, Tokenizer, greedy_token,
+    };
 
     #[test]
     fn validates_greedy_generation_config() {
@@ -204,5 +279,65 @@ mod tests {
             tokenizer.decode(&[256]),
             Err(ModelError::TokenOutOfRange { index: 0 })
         );
+    }
+
+    #[test]
+    fn builds_target_batches_from_draft_tokens() {
+        let batch =
+            TargetBatch::from_prefix_and_draft(&[1, 2], &[3, 4]).expect("batch should be valid");
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.as_slice()[0].as_slice(), &[1, 2]);
+        assert_eq!(batch.as_slice()[1].as_slice(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn rejects_empty_target_batches() {
+        assert_eq!(
+            TargetBatch::new(Vec::new()),
+            Err(ModelError::InvalidConfig(
+                "target batch must contain at least one prefix"
+            ))
+        );
+        assert_eq!(
+            TargetBatch::from_prefix_and_draft(&[1, 2], &[]),
+            Err(ModelError::InvalidConfig(
+                "draft tokens must not be empty for target verification"
+            ))
+        );
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingTarget {
+        calls: Vec<Vec<TokenId>>,
+    }
+
+    impl TargetModel for RecordingTarget {
+        fn vocab_size(&self) -> usize {
+            1
+        }
+
+        fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+            self.calls.push(prefix.to_vec());
+            Ok(vec![prefix.len() as f32])
+        }
+    }
+
+    #[test]
+    fn provides_sequential_batched_target_fallback() {
+        let batch = TargetBatch::new(vec![
+            TokenSequence::new(vec![10]),
+            TokenSequence::new(vec![10, 11]),
+        ])
+        .expect("batch should be valid");
+        let mut target = RecordingTarget::default();
+
+        let logits = target
+            .logits_for_prefixes(&batch)
+            .expect("fallback should run");
+
+        assert_eq!(BatchedTargetModel::vocab_size(&target), 1);
+        assert_eq!(target.calls, vec![vec![10], vec![10, 11]]);
+        assert_eq!(logits, vec![vec![1.0], vec![2.0]]);
     }
 }
