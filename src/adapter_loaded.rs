@@ -1,3 +1,6 @@
+#[cfg(feature = "tokenizers")]
+use std::path::Path;
+
 use crate::{
     adapters::{AdapterKind, AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
     config::{ModelAssetSummary, ModelConfigSummary, TokenizerConfigSummary},
@@ -77,6 +80,43 @@ impl Tokenizer for AdapterTokenizerPlaceholder {
         Err(ModelError::InvalidConfig(
             "metadata tokenizer cannot decode tokens",
         ))
+    }
+}
+
+#[cfg(feature = "tokenizers")]
+pub struct AdapterJsonTokenizer {
+    inner: tokenizers::Tokenizer,
+}
+
+#[cfg(feature = "tokenizers")]
+impl AdapterJsonTokenizer {
+    pub fn from_file(path: &Path) -> ModelResult<Self> {
+        let inner = tokenizers::Tokenizer::from_file(path)
+            .map_err(|_| ModelError::InvalidConfig("tokenizer JSON cannot be loaded"))?;
+
+        Ok(Self { inner })
+    }
+}
+
+#[cfg(feature = "tokenizers")]
+impl Tokenizer for AdapterJsonTokenizer {
+    fn vocab_size(&self) -> usize {
+        self.inner.get_vocab_size(false)
+    }
+
+    fn encode(&self, text: &str) -> ModelResult<TokenSequence> {
+        let encoding = self
+            .inner
+            .encode(text, false)
+            .map_err(|_| ModelError::InvalidConfig("tokenizer backend failed to encode text"))?;
+
+        Ok(TokenSequence::new(encoding.get_ids().to_vec()))
+    }
+
+    fn decode(&self, tokens: &[TokenId]) -> ModelResult<String> {
+        self.inner
+            .decode(tokens, true)
+            .map_err(|_| ModelError::InvalidConfig("tokenizer backend failed to decode tokens"))
     }
 }
 
@@ -276,5 +316,47 @@ mod tests {
         assert_eq!(loaded.target.kind, AdapterKind::Candle);
         assert_eq!(loaded_draft.kind, AdapterKind::Gguf);
         assert_eq!(loaded_draft.summary.weight_format, WeightFormat::Gguf);
+    }
+
+    #[cfg(feature = "tokenizers")]
+    #[test]
+    fn adapter_json_tokenizer_loads_hf_tokenizer_files() {
+        let temp = TempAssets::new("json-tokenizer", "model.safetensors");
+        write(
+            &temp.tokenizer,
+            r#"{
+                "version": "1.0",
+                "truncation": null,
+                "padding": null,
+                "added_tokens": [],
+                "normalizer": null,
+                "pre_tokenizer": {
+                    "type": "Whitespace"
+                },
+                "post_processor": null,
+                "decoder": null,
+                "model": {
+                    "type": "WordLevel",
+                    "vocab": {
+                        "[UNK]": 0,
+                        "hello": 1,
+                        "world": 2
+                    },
+                    "unk_token": "[UNK]"
+                }
+            }"#,
+        )
+        .expect("tokenizer should be written");
+
+        let tokenizer = crate::adapter_loaded::AdapterJsonTokenizer::from_file(&temp.tokenizer)
+            .expect("tokenizer should load");
+        let encoded = tokenizer.encode("hello world").expect("text should encode");
+
+        assert_eq!(tokenizer.vocab_size(), 3);
+        assert_eq!(encoded.as_slice(), &[1, 2]);
+        assert_eq!(
+            tokenizer.decode(encoded.as_slice()),
+            Ok(String::from("hello world"))
+        );
     }
 }
