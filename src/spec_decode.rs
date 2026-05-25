@@ -14,6 +14,24 @@ pub struct SpeculativeStats {
     pub target_forwards: usize,
 }
 
+impl SpeculativeStats {
+    pub fn acceptance_rate(&self) -> Option<f32> {
+        ratio(self.accepted_draft_tokens, self.drafted_tokens)
+    }
+
+    pub fn rejection_rate(&self) -> Option<f32> {
+        ratio(self.rejected_draft_tokens, self.drafted_tokens)
+    }
+
+    pub fn generated_tokens_per_target_forward(&self) -> Option<f32> {
+        ratio(self.generated_tokens, self.target_forwards)
+    }
+
+    pub fn accepted_tokens_per_round(&self) -> Option<f32> {
+        ratio(self.accepted_draft_tokens, self.draft_rounds)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeculativeOutput {
     pub tokens: TokenSequence,
@@ -95,6 +113,14 @@ fn target_greedy_token<M: TargetModel>(
     greedy_token(&logits)
 }
 
+fn ratio(numerator: usize, denominator: usize) -> Option<f32> {
+    if denominator == 0 {
+        return None;
+    }
+
+    Some(numerator as f32 / denominator as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -104,7 +130,7 @@ mod tests {
         model::{GenerationConfig, ModelError, TargetModel, TokenId},
     };
 
-    use super::speculative_greedy_decode;
+    use super::{SpeculativeStats, speculative_greedy_decode};
 
     struct ScriptedModel {
         tokens: VecDeque<TokenId>,
@@ -193,6 +219,10 @@ mod tests {
         assert_eq!(output.stats.accepted_draft_tokens, 2);
         assert_eq!(output.stats.rejected_draft_tokens, 1);
         assert_eq!(output.stats.target_forwards, 3);
+        assert_eq!(output.stats.acceptance_rate(), Some(2.0 / 3.0));
+        assert_eq!(output.stats.rejection_rate(), Some(1.0 / 3.0));
+        assert_eq!(output.stats.generated_tokens_per_target_forward(), Some(1.0));
+        assert_eq!(output.stats.accepted_tokens_per_round(), Some(1.0));
     }
 
     #[test]
@@ -210,5 +240,23 @@ mod tests {
         assert_eq!(output.stats.accepted_draft_tokens, 0);
         assert_eq!(output.stats.rejected_draft_tokens, 0);
         assert_eq!(output.stats.target_forwards, 1);
+    }
+
+    #[test]
+    fn metric_rates_are_empty_when_denominator_is_zero() {
+        let stats = SpeculativeStats {
+            prompt_tokens: 0,
+            generated_tokens: 0,
+            draft_rounds: 0,
+            drafted_tokens: 0,
+            accepted_draft_tokens: 0,
+            rejected_draft_tokens: 0,
+            target_forwards: 0,
+        };
+
+        assert_eq!(stats.acceptance_rate(), None);
+        assert_eq!(stats.rejection_rate(), None);
+        assert_eq!(stats.generated_tokens_per_target_forward(), None);
+        assert_eq!(stats.accepted_tokens_per_round(), None);
     }
 }
