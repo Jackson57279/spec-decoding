@@ -41,6 +41,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 25: Added `src/adapter_runtime_plan.rs`, a dependency-free target runtime planning layer that maps weight-checked loaded metadata into backend initialization inputs: adapter kind, model/tokenizer summaries, weight format, weight paths, and safetensors/GGUF metadata summaries. Runtime plans now reject metadata loads that skipped weight preflight, making the real adapter boundary explicit. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 26: Added `src/adapter_runtime_target.rs` with `AdapterRuntimeTargetPlaceholder` and `AdapterRuntimeTargetBundle`, consuming `AdapterTargetRuntimePlan` with construction-time shape checks and a `TargetModel` implementation that range-checks prefixes before failing logits explicitly until a real backend is wired in. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 27: Added loader-shell convenience methods in `src/adapter_runtime_plan.rs` and `src/adapter_runtime_target.rs` that chain weight-checked metadata loading into `AdapterRuntimePlanBundle` and `AdapterRuntimeTargetBundle` for target-only and target-plus-draft requests. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 28: Added `src/adapter_runtime_backend.rs` with feature-gated `candle` and `gguf` backend skeletons that consume `AdapterTargetRuntimePlan`, reuse runtime target validation, preserve planned weight paths, and fail logits with backend-specific messages until real inference is wired in. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -91,8 +92,8 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Next priorities: Add a one-shot loader path that chains weight preflight, runtime planning, and runtime target placeholder construction, then start the first real backend behind the runtime-plan contract.
 
 Next priorities:
-1. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`, consuming `AdapterTargetRuntimePlan`.
-2. Add the first feature-gated backend adapter skeleton that consumes `AdapterTargetRuntimePlan` and reuses runtime target validation before real logits support.
+1. Introduce real Hugging Face/Candle or GGUF logits support behind the feature-gated backend skeletons, consuming `AdapterTargetRuntimePlan`.
+2. Add backend-specific model weight opening and tensor-shape checks without loading full inference state until the control path is stable.
 3. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
 4. Add KV-cache-aware target inference shape and batched verification abstractions.
 5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
