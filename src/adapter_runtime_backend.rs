@@ -146,7 +146,10 @@ pub mod gguf {
             validate_gguf_runtime_weights(plan)?;
 
             Ok(Self {
-                logits: GgufRuntimeLogits::unavailable(TargetModel::vocab_size(&inner)),
+                logits: GgufRuntimeLogits::from_runtime_plan(
+                    plan,
+                    TargetModel::vocab_size(&inner),
+                )?,
                 inner,
                 weight_paths: weight_paths(plan),
             })
@@ -338,7 +341,6 @@ mod tests {
             "num_hidden_layers": 32
         }"#
     }
-
     fn incomplete_config() -> &'static str {
         r#"{"model_type":"llama","vocab_size":32000}"#
     }
