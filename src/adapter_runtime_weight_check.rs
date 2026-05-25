@@ -4,6 +4,8 @@ use crate::{
     weight_metadata::read_gguf_file_metadata,
 };
 
+const GGUF_EMBEDDING_TENSOR_NAMES: &[&str] = &["token_embd.weight"];
+
 #[cfg(feature = "safetensors")]
 const EMBEDDING_TENSOR_NAMES: &[&str] = &[
     "model.embed_tokens.weight",
@@ -12,6 +14,11 @@ const EMBEDDING_TENSOR_NAMES: &[&str] = &[
 ];
 
 pub fn validate_gguf_runtime_weights(plan: &AdapterTargetRuntimePlan) -> ModelResult<()> {
+    let model_type = required_text(plan.model_type.as_deref(), "model type is required")?;
+    let vocab_size = required_usize(plan.vocab_size, "vocab size is required")?;
+    let hidden_size = required_usize(plan.hidden_size, "hidden size is required")?;
+    let mut saw_embedding = false;
+
     for weight in &plan.weights {
         let metadata = read_gguf_file_metadata(&weight.path)?;
         if metadata.tensor_count == 0 {
@@ -26,7 +33,42 @@ pub fn validate_gguf_runtime_weights(plan: &AdapterTargetRuntimePlan) -> ModelRe
                     "gguf backend weight metadata changed after preflight",
                 ));
             }
+
+            if metadata.architecture != planned.architecture
+                || metadata.tensors.len() != planned.parsed_tensor_count
+            {
+                return Err(ModelError::InvalidConfig(
+                    "gguf backend weight metadata changed after preflight",
+                ));
+            }
         }
+
+        let architecture = required_text(
+            metadata.architecture.as_deref(),
+            "gguf backend missing architecture metadata",
+        )?;
+        if architecture != model_type {
+            return Err(ModelError::InvalidConfig(
+                "gguf backend architecture metadata does not match config",
+            ));
+        }
+
+        for tensor in &metadata.tensors {
+            if GGUF_EMBEDDING_TENSOR_NAMES.contains(&tensor.name.as_str()) {
+                saw_embedding = true;
+                if !shape_matches_embedding(&tensor.shape, vocab_size, hidden_size) {
+                    return Err(ModelError::InvalidConfig(
+                        "gguf backend weight tensor shape does not match config",
+                    ));
+                }
+            }
+        }
+    }
+
+    if !saw_embedding {
+        return Err(ModelError::InvalidConfig(
+            "gguf backend missing required weight tensor",
+        ));
     }
 
     Ok(())
@@ -82,9 +124,19 @@ pub fn validate_candle_runtime_weights(_plan: &AdapterTargetRuntimePlan) -> Mode
     ))
 }
 
-#[cfg(feature = "safetensors")]
 fn required_usize(value: Option<usize>, message: &'static str) -> ModelResult<usize> {
     value.ok_or(ModelError::InvalidConfig(message))
+}
+
+fn required_text<'a>(value: Option<&'a str>, message: &'static str) -> ModelResult<&'a str> {
+    match value {
+        Some(value) if !value.is_empty() => Ok(value),
+        _ => Err(ModelError::InvalidConfig(message)),
+    }
+}
+
+fn shape_matches_embedding(shape: &[usize], vocab_size: usize, hidden_size: usize) -> bool {
+    shape == [vocab_size, hidden_size] || shape == [hidden_size, vocab_size]
 }
 
 #[cfg(test)]
@@ -99,6 +151,7 @@ mod tests {
         adapter_runtime_plan::AdapterTargetRuntimePlan,
         adapter_runtime_weight_check::validate_gguf_runtime_weights,
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_parse::{test_gguf_bytes, test_gguf_empty_bytes},
         loading::{ModelAssetPaths, ModelLoadRequest},
         model::ModelError,
     };
@@ -174,15 +227,6 @@ mod tests {
         }"#
     }
 
-    fn gguf_bytes(tensor_count: u64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(b"GGUF");
-        bytes.extend(3_u32.to_le_bytes());
-        bytes.extend(tensor_count.to_le_bytes());
-        bytes.extend(4_u64.to_le_bytes());
-        bytes
-    }
-
     #[cfg(feature = "safetensors")]
     fn safetensors_bytes(tensor_name: &str, shape: &[usize]) -> Vec<u8> {
         let data_bytes = shape.iter().product::<usize>() * 4;
@@ -203,7 +247,12 @@ mod tests {
 
     #[test]
     fn validates_gguf_weight_headers() {
-        let assets = TempAssets::new("gguf-valid", "model.gguf", valid_config(), gguf_bytes(12));
+        let assets = TempAssets::new(
+            "gguf-valid",
+            "model.gguf",
+            valid_config(),
+            test_gguf_bytes(Some("llama"), "token_embd.weight", &[4, 2]),
+        );
 
         assert_eq!(
             validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
@@ -213,12 +262,85 @@ mod tests {
 
     #[test]
     fn rejects_empty_gguf_weight_headers() {
-        let assets = TempAssets::new("gguf-empty", "model.gguf", valid_config(), gguf_bytes(0));
+        let assets = TempAssets::new(
+            "gguf-empty",
+            "model.gguf",
+            valid_config(),
+            test_gguf_empty_bytes(),
+        );
 
         assert_eq!(
             validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
             Err(ModelError::InvalidConfig(
                 "gguf backend weight file must contain tensors"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_gguf_embedding_shape_mismatch() {
+        let assets = TempAssets::new(
+            "gguf-shape",
+            "model.gguf",
+            valid_config(),
+            test_gguf_bytes(Some("llama"), "token_embd.weight", &[5, 2]),
+        );
+
+        assert_eq!(
+            validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
+            Err(ModelError::InvalidConfig(
+                "gguf backend weight tensor shape does not match config"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_gguf_missing_embedding_tensor() {
+        let assets = TempAssets::new(
+            "gguf-missing-tensor",
+            "model.gguf",
+            valid_config(),
+            test_gguf_bytes(Some("llama"), "other.weight", &[4, 2]),
+        );
+
+        assert_eq!(
+            validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
+            Err(ModelError::InvalidConfig(
+                "gguf backend missing required weight tensor"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_gguf_missing_architecture_metadata() {
+        let assets = TempAssets::new(
+            "gguf-missing-architecture",
+            "model.gguf",
+            valid_config(),
+            test_gguf_bytes(None, "token_embd.weight", &[4, 2]),
+        );
+
+        assert_eq!(
+            validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
+            Err(ModelError::InvalidConfig(
+                "gguf backend missing architecture metadata"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_gguf_architecture_mismatch() {
+        let assets = TempAssets::new(
+            "gguf-architecture",
+            "model.gguf",
+            valid_config(),
+            test_gguf_bytes(Some("gpt2"), "token_embd.weight", &[4, 2]),
+        );
+
+        assert_eq!(
+            validate_gguf_runtime_weights(&assets.plan(AdapterKind::Gguf)),
+            Err(ModelError::InvalidConfig(
+                "gguf backend architecture metadata does not match config"
             ))
         );
     }
