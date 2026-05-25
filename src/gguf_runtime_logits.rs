@@ -1,4 +1,9 @@
-use crate::model::{ModelError, ModelResult, TokenId};
+use std::path::PathBuf;
+
+use crate::{
+    adapter_runtime_plan::{AdapterRuntimeGgufPlan, AdapterTargetRuntimePlan},
+    model::{ModelError, ModelResult, TokenId},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GgufRuntimeLogits {
@@ -7,11 +12,22 @@ pub(crate) struct GgufRuntimeLogits {
 }
 
 impl GgufRuntimeLogits {
-    pub(crate) fn unavailable(vocab_size: usize) -> Self {
-        Self {
-            engine: GgufLogitsEngine::Unavailable,
-            vocab_size,
+    pub(crate) fn from_runtime_plan(
+        plan: &AdapterTargetRuntimePlan,
+        vocab_size: usize,
+    ) -> ModelResult<Self> {
+        if plan.vocab_size != Some(vocab_size) {
+            return Err(ModelError::InvalidConfig(
+                "gguf logits vocab size must match runtime plan",
+            ));
         }
+
+        Ok(Self {
+            engine: GgufLogitsEngine::PlanBound(PlanBoundGgufLogitsEngine::from_runtime_plan(
+                plan, vocab_size,
+            )?),
+            vocab_size,
+        })
     }
 
     pub(crate) fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
@@ -35,7 +51,7 @@ impl GgufRuntimeLogits {
 
 #[derive(Debug, Clone, PartialEq)]
 enum GgufLogitsEngine {
-    Unavailable,
+    PlanBound(PlanBoundGgufLogitsEngine),
     #[cfg(test)]
     Static(StaticGgufLogitsEngine),
 }
@@ -43,15 +59,104 @@ enum GgufLogitsEngine {
 impl GgufLogitsEngine {
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
         match self {
-            Self::Unavailable => {
+            Self::PlanBound(engine) => {
                 let _ = prefix;
+                let _ = engine;
                 Err(ModelError::InvalidConfig(
-                    "gguf logits engine is not configured",
+                    "gguf logits evaluator is not implemented",
                 ))
             }
             #[cfg(test)]
             Self::Static(engine) => engine.logits_for_prefix(prefix),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanBoundGgufLogitsEngine {
+    model_type: String,
+    vocab_size: usize,
+    hidden_size: usize,
+    num_hidden_layers: usize,
+    weights: Vec<PlanBoundGgufWeight>,
+}
+
+impl PlanBoundGgufLogitsEngine {
+    fn from_runtime_plan(plan: &AdapterTargetRuntimePlan, vocab_size: usize) -> ModelResult<Self> {
+        let model_type = required_text(
+            plan.model_type.as_deref(),
+            "gguf logits model type is required",
+        )?
+        .to_owned();
+        let hidden_size = required_usize(plan.hidden_size, "gguf logits hidden size is required")?;
+        let num_hidden_layers = required_usize(
+            plan.num_hidden_layers,
+            "gguf logits hidden layer count is required",
+        )?;
+
+        if plan.weights.is_empty() {
+            return Err(ModelError::InvalidConfig(
+                "gguf logits require at least one weight file",
+            ));
+        }
+
+        let weights = plan
+            .weights
+            .iter()
+            .map(|weight| {
+                let gguf = weight.gguf.as_ref().ok_or(ModelError::InvalidConfig(
+                    "gguf logits require gguf weight metadata",
+                ))?;
+                Ok(PlanBoundGgufWeight::from_plan(weight.path.clone(), gguf))
+            })
+            .collect::<ModelResult<Vec<_>>>()?;
+
+        Ok(Self {
+            model_type,
+            vocab_size,
+            hidden_size,
+            num_hidden_layers,
+            weights,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlanBoundGgufWeight {
+    path: PathBuf,
+    version: u32,
+    tensor_count: u64,
+    metadata_kv_count: u64,
+    header_bytes: usize,
+    architecture: Option<String>,
+    parsed_tensor_count: usize,
+}
+
+impl PlanBoundGgufWeight {
+    fn from_plan(path: PathBuf, gguf: &AdapterRuntimeGgufPlan) -> Self {
+        Self {
+            path,
+            version: gguf.version,
+            tensor_count: gguf.tensor_count,
+            metadata_kv_count: gguf.metadata_kv_count,
+            header_bytes: gguf.header_bytes,
+            architecture: gguf.architecture.clone(),
+            parsed_tensor_count: gguf.parsed_tensor_count,
+        }
+    }
+}
+
+fn required_text<'a>(value: Option<&'a str>, message: &'static str) -> ModelResult<&'a str> {
+    match value {
+        Some(value) if !value.is_empty() => Ok(value),
+        _ => Err(ModelError::InvalidConfig(message)),
+    }
+}
+
+fn required_usize(value: Option<usize>, message: &'static str) -> ModelResult<usize> {
+    match value {
+        Some(value) if value > 0 => Ok(value),
+        _ => Err(ModelError::InvalidConfig(message)),
     }
 }
 
@@ -79,10 +184,43 @@ impl StaticGgufLogitsEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{
+        adapter_runtime_plan::{
+            AdapterRuntimeGgufPlan, AdapterRuntimeWeightFilePlan, AdapterTargetRuntimePlan,
+        },
+        adapters::AdapterKind,
         gguf_runtime_logits::GgufRuntimeLogits,
+        loading::WeightFormat,
         model::{ModelError, TokenId},
     };
+
+    fn runtime_plan() -> AdapterTargetRuntimePlan {
+        AdapterTargetRuntimePlan {
+            kind: AdapterKind::Gguf,
+            model_type: Some("llama".to_owned()),
+            vocab_size: Some(2),
+            hidden_size: Some(4),
+            num_hidden_layers: Some(2),
+            tokenizer_model_type: None,
+            tokenizer_vocab_size: None,
+            weight_format: WeightFormat::Gguf,
+            weights: vec![AdapterRuntimeWeightFilePlan {
+                path: PathBuf::from("/tmp/model.gguf"),
+                format: WeightFormat::Gguf,
+                safetensors: None,
+                gguf: Some(AdapterRuntimeGgufPlan {
+                    version: 3,
+                    tensor_count: 1,
+                    metadata_kv_count: 1,
+                    header_bytes: 128,
+                    architecture: Some("llama".to_owned()),
+                    parsed_tensor_count: 1,
+                }),
+            }],
+        }
+    }
 
     #[test]
     fn static_gguf_logits_engine_returns_logits() {
@@ -104,14 +242,37 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_gguf_logits_engine_fails_explicitly() {
-        let mut logits = GgufRuntimeLogits::unavailable(2);
+    fn binds_gguf_logits_to_runtime_plan() {
+        let mut logits =
+            GgufRuntimeLogits::from_runtime_plan(&runtime_plan(), 2).expect("plan should bind");
         let prefix: &[TokenId] = &[0];
+
+        match &logits.engine {
+            super::GgufLogitsEngine::PlanBound(engine) => {
+                assert_eq!(engine.model_type, "llama");
+                assert_eq!(engine.vocab_size, 2);
+                assert_eq!(engine.hidden_size, 4);
+                assert_eq!(engine.num_hidden_layers, 2);
+                assert_eq!(engine.weights.len(), 1);
+                assert_eq!(engine.weights[0].architecture.as_deref(), Some("llama"));
+            }
+            _ => panic!("expected plan-bound engine"),
+        }
 
         assert_eq!(
             logits.logits_for_prefix(prefix),
             Err(ModelError::InvalidConfig(
-                "gguf logits engine is not configured"
+                "gguf logits evaluator is not implemented"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_gguf_logits_vocab_mismatch() {
+        assert_eq!(
+            GgufRuntimeLogits::from_runtime_plan(&runtime_plan(), 3),
+            Err(ModelError::InvalidConfig(
+                "gguf logits vocab size must match runtime plan"
             ))
         );
     }
