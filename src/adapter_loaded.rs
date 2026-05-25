@@ -8,6 +8,9 @@ use crate::{
     model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
 };
 
+#[cfg(feature = "tokenizers")]
+use crate::loading::{LoadedModel, LoadedModelBundle};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterTargetPlaceholder {
     summary: ModelConfigSummary,
@@ -144,6 +147,17 @@ impl AdapterLoadedModelMetadata {
             summary: preflight.summary,
         }
     }
+
+    #[cfg(feature = "tokenizers")]
+    pub fn with_json_tokenizer(
+        &self,
+        tokenizer_file: &Path,
+    ) -> ModelResult<LoadedModel<AdapterTargetPlaceholder, AdapterJsonTokenizer>> {
+        Ok(LoadedModel::new(
+            self.model.clone(),
+            AdapterJsonTokenizer::from_file(tokenizer_file)?,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +179,37 @@ impl AdapterLoadedMetadataBundle {
     pub fn has_draft(&self) -> bool {
         self.draft.is_some()
     }
+
+    #[cfg(feature = "tokenizers")]
+    pub fn with_json_tokenizers(
+        &self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<
+        LoadedModelBundle<
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+        >,
+    > {
+        let target = self
+            .target
+            .with_json_tokenizer(&request.target.tokenizer_file)?;
+
+        let draft = match (&self.draft, &request.draft) {
+            (Some(metadata), Some(assets)) => {
+                Some(metadata.with_json_tokenizer(&assets.tokenizer_file)?)
+            }
+            (None, None) => None,
+            _ => {
+                return Err(ModelError::InvalidConfig(
+                    "loaded metadata and request draft shape must match",
+                ));
+            }
+        };
+
+        Ok(LoadedModelBundle { target, draft })
+    }
 }
 
 impl AdapterLoaderShell {
@@ -183,6 +228,39 @@ impl AdapterLoaderShell {
     ) -> ModelResult<AdapterLoadedMetadataBundle> {
         self.preflight_with_draft(draft_kind, request)
             .map(AdapterLoadedMetadataBundle::from_preflight)
+    }
+
+    #[cfg(feature = "tokenizers")]
+    pub fn load_target_with_json_tokenizer(
+        self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<
+        LoadedModelBundle<
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+        >,
+    > {
+        self.load_target_metadata(request)?
+            .with_json_tokenizers(request)
+    }
+
+    #[cfg(feature = "tokenizers")]
+    pub fn load_with_draft_json_tokenizers(
+        self,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<
+        LoadedModelBundle<
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+            AdapterTargetPlaceholder,
+            AdapterJsonTokenizer,
+        >,
+    > {
+        self.load_with_draft_metadata(draft_kind, request)?
+            .with_json_tokenizers(request)
     }
 }
 
@@ -247,6 +325,35 @@ mod tests {
                 vec![self.weights.clone()],
             )
             .expect("asset paths should be valid")
+        }
+
+        #[cfg(feature = "tokenizers")]
+        fn write_word_level_tokenizer(&self) {
+            write(
+                &self.tokenizer,
+                r#"{
+                    "version": "1.0",
+                    "truncation": null,
+                    "padding": null,
+                    "added_tokens": [],
+                    "normalizer": null,
+                    "pre_tokenizer": {
+                        "type": "Whitespace"
+                    },
+                    "post_processor": null,
+                    "decoder": null,
+                    "model": {
+                        "type": "WordLevel",
+                        "vocab": {
+                            "[UNK]": 0,
+                            "hello": 1,
+                            "world": 2
+                        },
+                        "unk_token": "[UNK]"
+                    }
+                }"#,
+            )
+            .expect("tokenizer should be written");
         }
     }
 
@@ -322,31 +429,7 @@ mod tests {
     #[test]
     fn adapter_json_tokenizer_loads_hf_tokenizer_files() {
         let temp = TempAssets::new("json-tokenizer", "model.safetensors");
-        write(
-            &temp.tokenizer,
-            r#"{
-                "version": "1.0",
-                "truncation": null,
-                "padding": null,
-                "added_tokens": [],
-                "normalizer": null,
-                "pre_tokenizer": {
-                    "type": "Whitespace"
-                },
-                "post_processor": null,
-                "decoder": null,
-                "model": {
-                    "type": "WordLevel",
-                    "vocab": {
-                        "[UNK]": 0,
-                        "hello": 1,
-                        "world": 2
-                    },
-                    "unk_token": "[UNK]"
-                }
-            }"#,
-        )
-        .expect("tokenizer should be written");
+        temp.write_word_level_tokenizer();
 
         let tokenizer = crate::adapter_loaded::AdapterJsonTokenizer::from_file(&temp.tokenizer)
             .expect("tokenizer should load");
@@ -357,6 +440,51 @@ mod tests {
         assert_eq!(
             tokenizer.decode(encoded.as_slice()),
             Ok(String::from("hello world"))
+        );
+    }
+
+    #[cfg(feature = "tokenizers")]
+    #[test]
+    fn loader_shell_can_return_json_tokenizer_runtime() {
+        let target = TempAssets::new("runtime-target", "model.safetensors");
+        target.write_word_level_tokenizer();
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let loaded = AdapterLoaderShell::new(AdapterKind::Candle)
+            .load_target_with_json_tokenizer(&request)
+            .expect("runtime tokenizer should load");
+        let encoded = loaded
+            .target
+            .tokenizer
+            .encode("hello world")
+            .expect("text should encode");
+
+        assert_eq!(loaded.target.model.model_type(), Some("llama"));
+        assert_eq!(encoded.as_slice(), &[1, 2]);
+        assert!(loaded.draft.is_none());
+    }
+
+    #[cfg(feature = "tokenizers")]
+    #[test]
+    fn loader_shell_can_return_target_and_draft_json_tokenizer_runtime() {
+        let target = TempAssets::new("runtime-target-draft", "model.safetensors");
+        let draft = TempAssets::new("runtime-draft", "model.gguf");
+        target.write_word_level_tokenizer();
+        draft.write_word_level_tokenizer();
+        let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+
+        let loaded = AdapterLoaderShell::new(AdapterKind::Candle)
+            .load_with_draft_json_tokenizers(AdapterKind::Gguf, &request)
+            .expect("runtime tokenizers should load");
+
+        assert_eq!(loaded.target.tokenizer.vocab_size(), 3);
+        assert_eq!(
+            loaded
+                .draft
+                .expect("draft runtime should load")
+                .tokenizer
+                .vocab_size(),
+            3
         );
     }
 }
