@@ -2,6 +2,7 @@ pub mod block_draft;
 pub mod decode;
 pub mod drafters;
 pub mod model;
+pub mod runtime;
 pub mod spec_decode;
 
 pub const CRATE_NAME: &str = "speclative-diffusion";
