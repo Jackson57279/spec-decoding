@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use crate::{
     adapter_loaded::{AdapterLoadedMetadataBundle, AdapterLoadedModelMetadata},
     adapter_weight_preflight::AdapterWeightFilePreflight,
-    adapters::AdapterKind,
-    loading::WeightFormat,
+    adapters::{AdapterKind, AdapterLoaderShell},
+    loading::{ModelLoadRequest, WeightFormat},
     model::{ModelError, ModelResult},
     weight_metadata::{GgufFileMetadata, SafeTensorsFileMetadata},
 };
@@ -157,6 +157,25 @@ impl AdapterRuntimePlanBundle {
     }
 }
 
+impl AdapterLoaderShell {
+    pub fn load_target_runtime_plan_bundle(
+        self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterRuntimePlanBundle> {
+        let loaded = self.load_target_metadata_with_weight_preflight(request)?;
+        AdapterRuntimePlanBundle::from_loaded_metadata(&loaded)
+    }
+
+    pub fn load_with_draft_runtime_plan_bundle(
+        self,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterRuntimePlanBundle> {
+        let loaded = self.load_with_draft_metadata_with_weight_preflight(draft_kind, request)?;
+        AdapterRuntimePlanBundle::from_loaded_metadata(&loaded)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -284,6 +303,50 @@ mod tests {
             .expect("loaded metadata should be built");
 
         let bundle = AdapterRuntimePlanBundle::from_loaded_metadata(&loaded)
+            .expect("runtime plan bundle should be built");
+
+        assert!(bundle.has_draft());
+        assert_eq!(bundle.target.weight_format, WeightFormat::Gguf);
+        assert_eq!(
+            bundle.draft.expect("draft runtime plan").weights[0]
+                .gguf
+                .as_ref()
+                .expect("gguf metadata")
+                .metadata_kv_count,
+            4
+        );
+    }
+
+    #[test]
+    fn loader_shell_builds_target_runtime_plan_bundle() {
+        let target = TempAssets::new("shell-target", "model.gguf");
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let bundle = AdapterLoaderShell::new(AdapterKind::Gguf)
+            .load_target_runtime_plan_bundle(&request)
+            .expect("runtime plan bundle should be built");
+
+        assert!(!bundle.has_draft());
+        assert_eq!(bundle.target.kind, AdapterKind::Gguf);
+        assert_eq!(bundle.target.model_type.as_deref(), Some("llama"));
+        assert_eq!(
+            bundle.target.weights[0]
+                .gguf
+                .as_ref()
+                .expect("gguf metadata")
+                .tensor_count,
+            12
+        );
+    }
+
+    #[test]
+    fn loader_shell_builds_target_and_draft_runtime_plan_bundle() {
+        let target = TempAssets::new("shell-target-draft", "model.gguf");
+        let draft = TempAssets::new("shell-draft", "draft.gguf");
+        let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+
+        let bundle = AdapterLoaderShell::new(AdapterKind::Gguf)
+            .load_with_draft_runtime_plan_bundle(AdapterKind::Gguf, &request)
             .expect("runtime plan bundle should be built");
 
         assert!(bundle.has_draft());
