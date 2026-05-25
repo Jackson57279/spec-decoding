@@ -2,7 +2,10 @@ use std::{fs::File, path::Path};
 
 use serde_json::Value;
 
-use crate::model::{ModelError, ModelResult};
+use crate::{
+    loading::{ModelAssetPaths, WeightFormat},
+    model::{ModelError, ModelResult},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelConfigSummary {
@@ -16,6 +19,14 @@ pub struct ModelConfigSummary {
 pub struct TokenizerConfigSummary {
     pub model_type: Option<String>,
     pub vocab_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelAssetSummary {
+    pub model: ModelConfigSummary,
+    pub tokenizer: TokenizerConfigSummary,
+    pub weight_format: WeightFormat,
+    pub weight_files: usize,
 }
 
 pub fn read_model_config_summary(path: &Path) -> ModelResult<ModelConfigSummary> {
@@ -36,6 +47,17 @@ pub fn read_tokenizer_config_summary(path: &Path) -> ModelResult<TokenizerConfig
     Ok(TokenizerConfigSummary {
         model_type: string_field(model, "type"),
         vocab_size: object_len_field(model, "vocab"),
+    })
+}
+
+pub fn read_model_asset_summary(assets: &ModelAssetPaths) -> ModelResult<ModelAssetSummary> {
+    assets.validate()?;
+
+    Ok(ModelAssetSummary {
+        model: read_model_config_summary(&assets.config_file)?,
+        tokenizer: read_tokenizer_config_summary(&assets.tokenizer_file)?,
+        weight_format: assets.weight_format()?,
+        weight_files: assets.weight_files.len(),
     })
 }
 
@@ -78,7 +100,11 @@ mod tests {
     };
 
     use crate::{
-        config::{read_model_config_summary, read_tokenizer_config_summary},
+        config::{
+            ModelAssetSummary, ModelConfigSummary, TokenizerConfigSummary,
+            read_model_asset_summary, read_model_config_summary, read_tokenizer_config_summary,
+        },
+        loading::{ModelAssetPaths, WeightFormat},
         model::ModelError,
     };
 
@@ -106,6 +132,77 @@ mod tests {
     }
 
     impl Drop for TempJson {
+        fn drop(&mut self) {
+            let _ = remove_dir_all(&self.root);
+        }
+    }
+
+    struct TempModelAssets {
+        root: PathBuf,
+        config: PathBuf,
+        tokenizer: PathBuf,
+        weights: PathBuf,
+    }
+
+    impl TempModelAssets {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "speclative-diffusion-assets-{}-{unique}",
+                std::process::id()
+            ));
+            create_dir_all(&root).expect("temp dir should be created");
+            let config = root.join("config.json");
+            let tokenizer = root.join("tokenizer.json");
+            let weights = root.join("model.safetensors");
+
+            write(
+                &config,
+                r#"{
+                    "model_type": "llama",
+                    "vocab_size": 32000,
+                    "hidden_size": 4096,
+                    "num_hidden_layers": 32
+                }"#,
+            )
+            .expect("config should be written");
+            write(
+                &tokenizer,
+                r#"{
+                    "model": {
+                        "type": "BPE",
+                        "vocab": {
+                            "hello": 0,
+                            "world": 1
+                        }
+                    }
+                }"#,
+            )
+            .expect("tokenizer should be written");
+            File::create(&weights).expect("weights should be created");
+
+            Self {
+                root,
+                config,
+                tokenizer,
+                weights,
+            }
+        }
+
+        fn paths(&self) -> ModelAssetPaths {
+            ModelAssetPaths::new(
+                self.config.clone(),
+                self.tokenizer.clone(),
+                vec![self.weights.clone()],
+            )
+            .expect("asset paths should be valid")
+        }
+    }
+
+    impl Drop for TempModelAssets {
         fn drop(&mut self) {
             let _ = remove_dir_all(&self.root);
         }
@@ -150,6 +247,29 @@ mod tests {
 
         assert_eq!(summary.model_type.as_deref(), Some("BPE"));
         assert_eq!(summary.vocab_size, Some(2));
+    }
+
+    #[test]
+    fn reads_model_asset_summaries() {
+        let assets = TempModelAssets::new();
+
+        assert_eq!(
+            read_model_asset_summary(&assets.paths()),
+            Ok(ModelAssetSummary {
+                model: ModelConfigSummary {
+                    model_type: Some(String::from("llama")),
+                    vocab_size: Some(32000),
+                    hidden_size: Some(4096),
+                    num_hidden_layers: Some(32),
+                },
+                tokenizer: TokenizerConfigSummary {
+                    model_type: Some(String::from("BPE")),
+                    vocab_size: Some(2),
+                },
+                weight_format: WeightFormat::SafeTensors,
+                weight_files: 1,
+            })
+        );
     }
 
     #[test]
