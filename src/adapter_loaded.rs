@@ -2,6 +2,9 @@
 use std::path::Path;
 
 use crate::{
+    adapter_weight_preflight::{
+        AdapterLoadWeightPreflight, AdapterModelWeightPreflight, AdapterWeightFilePreflight,
+    },
     adapters::{AdapterKind, AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
     config::{ModelAssetSummary, ModelConfigSummary, TokenizerConfigSummary},
     loading::ModelLoadRequest,
@@ -129,10 +132,22 @@ pub struct AdapterLoadedModelMetadata {
     pub model: AdapterTargetPlaceholder,
     pub tokenizer: AdapterTokenizerPlaceholder,
     pub summary: ModelAssetSummary,
+    pub weights: Vec<AdapterWeightFilePreflight>,
 }
 
 impl AdapterLoadedModelMetadata {
     pub fn from_preflight(preflight: AdapterModelPreflight) -> Self {
+        Self::from_parts(preflight, Vec::new())
+    }
+
+    pub fn from_weight_preflight(preflight: AdapterModelWeightPreflight) -> Self {
+        Self::from_parts(preflight.model, preflight.weights)
+    }
+
+    fn from_parts(
+        preflight: AdapterModelPreflight,
+        weights: Vec<AdapterWeightFilePreflight>,
+    ) -> Self {
         let tokenizer =
             AdapterTokenizerPlaceholder::from_summary(preflight.summary.tokenizer.clone());
         let model = AdapterTargetPlaceholder::from_summaries(
@@ -145,6 +160,7 @@ impl AdapterLoadedModelMetadata {
             model,
             tokenizer,
             summary: preflight.summary,
+            weights,
         }
     }
 
@@ -173,6 +189,15 @@ impl AdapterLoadedMetadataBundle {
             draft: preflight
                 .draft
                 .map(AdapterLoadedModelMetadata::from_preflight),
+        }
+    }
+
+    pub fn from_weight_preflight(preflight: AdapterLoadWeightPreflight) -> Self {
+        Self {
+            target: AdapterLoadedModelMetadata::from_weight_preflight(preflight.target),
+            draft: preflight
+                .draft
+                .map(AdapterLoadedModelMetadata::from_weight_preflight),
         }
     }
 
@@ -228,6 +253,23 @@ impl AdapterLoaderShell {
     ) -> ModelResult<AdapterLoadedMetadataBundle> {
         self.preflight_with_draft(draft_kind, request)
             .map(AdapterLoadedMetadataBundle::from_preflight)
+    }
+
+    pub fn load_target_metadata_with_weight_preflight(
+        self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterLoadedMetadataBundle> {
+        self.preflight_target_only_with_weight_metadata(request)
+            .map(AdapterLoadedMetadataBundle::from_weight_preflight)
+    }
+
+    pub fn load_with_draft_metadata_with_weight_preflight(
+        self,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterLoadedMetadataBundle> {
+        self.preflight_with_draft_weight_metadata(draft_kind, request)
+            .map(AdapterLoadedMetadataBundle::from_weight_preflight)
     }
 
     #[cfg(feature = "tokenizers")]
@@ -327,6 +369,25 @@ mod tests {
             .expect("asset paths should be valid")
         }
 
+        fn write_gguf(&self) {
+            let mut bytes = Vec::new();
+            bytes.extend(b"GGUF");
+            bytes.extend(3_u32.to_le_bytes());
+            bytes.extend(11_u64.to_le_bytes());
+            bytes.extend(5_u64.to_le_bytes());
+            write(&self.weights, bytes).expect("gguf should be written");
+        }
+
+        #[cfg(feature = "safetensors")]
+        fn write_safetensors(&self) {
+            let header = br#"{"weight":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#;
+            let mut bytes = Vec::new();
+            bytes.extend((header.len() as u64).to_le_bytes());
+            bytes.extend(header);
+            bytes.extend([0_u8; 8]);
+            write(&self.weights, bytes).expect("safetensors should be written");
+        }
+
         #[cfg(feature = "tokenizers")]
         fn write_word_level_tokenizer(&self) {
             write(
@@ -423,6 +484,58 @@ mod tests {
         assert_eq!(loaded.target.kind, AdapterKind::Candle);
         assert_eq!(loaded_draft.kind, AdapterKind::Gguf);
         assert_eq!(loaded_draft.summary.weight_format, WeightFormat::Gguf);
+    }
+
+    #[test]
+    fn loader_shell_returns_metadata_after_weight_preflight() {
+        let target = TempAssets::new("target-weight", "model.safetensors");
+        #[cfg(feature = "safetensors")]
+        target.write_safetensors();
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let loaded = AdapterLoaderShell::new(AdapterKind::Candle)
+            .load_target_metadata_with_weight_preflight(&request)
+            .expect("metadata should load after weight preflight");
+
+        assert_eq!(loaded.target.kind, AdapterKind::Candle);
+        assert_eq!(loaded.target.weights.len(), 1);
+        assert_eq!(loaded.target.weights[0].format, WeightFormat::SafeTensors);
+
+        #[cfg(feature = "safetensors")]
+        assert_eq!(
+            loaded.target.weights[0]
+                .safetensors
+                .as_ref()
+                .expect("safetensors metadata")
+                .tensor_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn loader_shell_returns_draft_metadata_after_weight_preflight() {
+        let target = TempAssets::new("target-draft-weight", "model.safetensors");
+        let draft = TempAssets::new("draft-weight", "model.gguf");
+        draft.write_gguf();
+        #[cfg(feature = "safetensors")]
+        target.write_safetensors();
+        let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+
+        let loaded = AdapterLoaderShell::new(AdapterKind::Candle)
+            .load_with_draft_metadata_with_weight_preflight(AdapterKind::Gguf, &request)
+            .expect("metadata should load after weight preflight");
+        let loaded_draft = loaded.draft.expect("draft metadata should exist");
+
+        assert_eq!(loaded.target.weights[0].format, WeightFormat::SafeTensors);
+        assert_eq!(loaded_draft.weights[0].format, WeightFormat::Gguf);
+        assert_eq!(
+            loaded_draft.weights[0]
+                .gguf
+                .as_ref()
+                .expect("gguf metadata")
+                .tensor_count,
+            11
+        );
     }
 
     #[cfg(feature = "tokenizers")]
