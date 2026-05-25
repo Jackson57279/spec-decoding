@@ -10,6 +10,7 @@ pub mod block_draft;
 pub mod config;
 pub mod decode;
 pub mod drafters;
+pub(crate) mod gguf_parse;
 pub mod loading;
 pub mod model;
 pub mod runtime;
