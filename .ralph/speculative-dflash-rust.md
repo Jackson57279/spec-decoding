@@ -7,3 +7,11 @@ Deep research speculative decoding and DFlash. Goal: design and implement a bett
 - Iteration 3: Added typed Rust model primitives in `src/model.rs`, exported them from `src/lib.rs`, and covered generation config plus greedy-token selection with unit tests. Verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints. Confirmed `ai@192.168.1.73` is reachable, but the initial remote tooling check did not find the expected `sfw`/`cargo` commands after login.
 - Iteration 4: Added `src/decode.rs` with the baseline greedy autoregressive decoder and exported it from `src/lib.rs`. Verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced to `/home/ai/speclative-diffusion` and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test` because `sfw` is not installed there.
 - Iteration 5: Added `src/drafters.rs` with a `Drafter` trait, `DraftSequence`, and a custom prompt-lookup drafter for training-free speculative candidates. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test`.
+
+## Reflection 1
+
+- Accomplished: Bootstrapped the repository, established a Rust crate, added typed model/generation primitives, built a baseline greedy decoder, and added the first drafter boundary with a prompt-lookup implementation.
+- Working well: Small commits after each file change are keeping history reviewable, the test suite is fast, and remote verification on `ai@192.168.1.73` works after syncing the repo.
+- Blocking or weak spots: The remote host has `cargo` but not `sfw`, so remote package/tool execution is less locked down than local execution. The runtime still uses mock/scripted model tests; no real HF/Candle model loading exists yet.
+- Approach adjustment: Continue the narrow Rust-first path, but add the speculative verification loop before pulling in heavy Candle dependencies. That keeps the lossless acceptance logic testable independent of GPU/model integration.
+- Next priorities: Implement speculative verification metrics using the existing `TargetModel` and `Drafter` traits, then add a DFlash-style block drafter interface and only after that wire in actual model loading.
