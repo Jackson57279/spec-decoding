@@ -40,14 +40,16 @@ pub fn read_tokenizer_config_summary(path: &Path) -> ModelResult<TokenizerConfig
 }
 
 fn read_json(path: &Path) -> ModelResult<Value> {
+    if !path.is_file() {
+        return Err(ModelError::InvalidConfig("JSON file must exist"));
+    }
+
     let file = File::open(path).map_err(|_| ModelError::InvalidConfig("JSON file must exist"))?;
     serde_json::from_reader(file).map_err(|_| ModelError::InvalidConfig("invalid JSON file"))
 }
 
 fn string_field(json: &Value, key: &str) -> Option<String> {
-    json.get(key)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+    json.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
 fn usize_field(json: &Value, key: &str) -> ModelResult<Option<usize>> {
@@ -58,7 +60,9 @@ fn usize_field(json: &Value, key: &str) -> ModelResult<Option<usize>> {
 }
 
 fn object_len_field(json: &Value, key: &str) -> Option<usize> {
-    json.get(key).and_then(Value::as_object).map(|value| value.len())
+    json.get(key)
+        .and_then(Value::as_object)
+        .map(|value| value.len())
 }
 
 fn value_as_usize(value: &Value) -> Result<usize, ()> {
