@@ -1,0 +1,5 @@
+Deep research speculative decoding and DFlash. Goal: design and implement a better custom Rust-first version suitable for full-model speculative decoding, not just draft-only HF models. Constraints: use only Cursor-exposed tools; use real web/search tools before claiming research; workspace currently /home/dih/speclative-diffusion is not a git repo; commits requested after every file change, so resolve repo initialization/location before editing; do not start dev servers; run build/check commands only; prefer remote execution on ai@192.168.1.73 if safe and available; max 100 iterations.
+
+## Progress
+
+- Iteration 1: Confirmed the workspace was not a git repository, initialized `/home/dih/speclative-diffusion`, and committed `.gitignore` so generated `.crew` state, Ralph state JSON, and Rust `target/` output stay out of commits.
