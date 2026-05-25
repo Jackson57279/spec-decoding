@@ -17,6 +17,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 
 - Continuation iteration 1: Added a dependency-free `Tokenizer` trait and `ByteTokenizer` smoke implementation in `src/model.rs` so future HF/Candle/GGUF loaders have a typed encode/decode boundary. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 - Continuation iteration 2: Extended `src/loading.rs` so `ModelLoader` now loads target and draft tokenizers alongside their models, returning `LoadedModel` entries inside `LoadedModelBundle`. Verified locally with `sfw cargo fmt`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
+- Continuation iteration 3: Added `WeightFormat` classification in `src/loading.rs` so loader adapters can distinguish safetensors from GGUF assets and reject mixed weight formats before dispatch. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
