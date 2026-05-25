@@ -147,7 +147,11 @@ mod tests {
     }
 
     impl Drafter for ScriptedDrafter {
-        fn draft(&mut self, _prefix: &[TokenId], max_tokens: usize) -> Result<DraftSequence, ModelError> {
+        fn draft(
+            &mut self,
+            _prefix: &[TokenId],
+            max_tokens: usize,
+        ) -> Result<DraftSequence, ModelError> {
             let tokens = self.drafts.pop_front().unwrap_or_default();
             Ok(DraftSequence::new(
                 tokens.into_iter().take(max_tokens).collect(),
