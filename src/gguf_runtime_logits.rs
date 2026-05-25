@@ -22,10 +22,10 @@ impl GgufRuntimeLogits {
             ));
         }
 
+        let plan = PlanBoundGgufLogitsEngine::from_runtime_plan(plan, vocab_size)?;
+
         Ok(Self {
-            engine: GgufLogitsEngine::PlanBound(PlanBoundGgufLogitsEngine::from_runtime_plan(
-                plan, vocab_size,
-            )?),
+            engine: GgufLogitsEngine::from_plan_bound(plan),
             vocab_size,
         })
     }
@@ -51,14 +51,32 @@ impl GgufRuntimeLogits {
 
 #[derive(Debug, Clone, PartialEq)]
 enum GgufLogitsEngine {
+    #[cfg(feature = "gguf-llama-cpp")]
+    LlamaCpp(LlamaCppGgufLogitsEngine),
+    #[cfg(not(feature = "gguf-llama-cpp"))]
     PlanBound(PlanBoundGgufLogitsEngine),
     #[cfg(test)]
     Static(StaticGgufLogitsEngine),
 }
 
 impl GgufLogitsEngine {
+    fn from_plan_bound(plan: PlanBoundGgufLogitsEngine) -> Self {
+        #[cfg(feature = "gguf-llama-cpp")]
+        {
+            Self::LlamaCpp(LlamaCppGgufLogitsEngine::new(plan))
+        }
+
+        #[cfg(not(feature = "gguf-llama-cpp"))]
+        {
+            Self::PlanBound(plan)
+        }
+    }
+
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
         match self {
+            #[cfg(feature = "gguf-llama-cpp")]
+            Self::LlamaCpp(engine) => engine.logits_for_prefix(prefix),
+            #[cfg(not(feature = "gguf-llama-cpp"))]
             Self::PlanBound(engine) => {
                 let _ = prefix;
                 let _ = engine;
@@ -69,6 +87,27 @@ impl GgufLogitsEngine {
             #[cfg(test)]
             Self::Static(engine) => engine.logits_for_prefix(prefix),
         }
+    }
+}
+
+#[cfg(feature = "gguf-llama-cpp")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LlamaCppGgufLogitsEngine {
+    plan: PlanBoundGgufLogitsEngine,
+}
+
+#[cfg(feature = "gguf-llama-cpp")]
+impl LlamaCppGgufLogitsEngine {
+    fn new(plan: PlanBoundGgufLogitsEngine) -> Self {
+        Self { plan }
+    }
+
+    fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+        let _ = prefix;
+        let _ = &self.plan;
+        Err(ModelError::InvalidConfig(
+            "gguf logits evaluator is not implemented",
+        ))
     }
 }
 
@@ -248,13 +287,13 @@ mod tests {
         let prefix: &[TokenId] = &[0];
 
         match &logits.engine {
+            #[cfg(feature = "gguf-llama-cpp")]
+            super::GgufLogitsEngine::LlamaCpp(engine) => {
+                assert_bound_plan(&engine.plan);
+            }
+            #[cfg(not(feature = "gguf-llama-cpp"))]
             super::GgufLogitsEngine::PlanBound(engine) => {
-                assert_eq!(engine.model_type, "llama");
-                assert_eq!(engine.vocab_size, 2);
-                assert_eq!(engine.hidden_size, 4);
-                assert_eq!(engine.num_hidden_layers, 2);
-                assert_eq!(engine.weights.len(), 1);
-                assert_eq!(engine.weights[0].architecture.as_deref(), Some("llama"));
+                assert_bound_plan(engine);
             }
             _ => panic!("expected plan-bound engine"),
         }
@@ -265,6 +304,15 @@ mod tests {
                 "gguf logits evaluator is not implemented"
             ))
         );
+    }
+
+    fn assert_bound_plan(engine: &super::PlanBoundGgufLogitsEngine) {
+        assert_eq!(engine.model_type, "llama");
+        assert_eq!(engine.vocab_size, 2);
+        assert_eq!(engine.hidden_size, 4);
+        assert_eq!(engine.num_hidden_layers, 2);
+        assert_eq!(engine.weights.len(), 1);
+        assert_eq!(engine.weights[0].architecture.as_deref(), Some("llama"));
     }
 
     #[test]
