@@ -240,6 +240,7 @@ mod tests {
     use crate::{
         adapter_runtime_plan::AdapterTargetRuntimePlan,
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_parse::{test_gguf_bytes, test_gguf_empty_bytes},
         loading::{ModelAssetPaths, ModelLoadRequest},
         model::{ModelError, TargetModel},
     };
@@ -253,7 +254,12 @@ mod tests {
 
     impl TempAssets {
         fn gguf(name: &str, config: &str) -> Self {
-            Self::new(name, "model.gguf", config, gguf_bytes(12))
+            Self::new(
+                name,
+                "model.gguf",
+                config,
+                test_gguf_bytes(Some("llama"), "token_embd.weight", &[4, 2]),
+            )
         }
 
         fn safetensors(name: &str, config: &str, shape: &[usize]) -> Self {
@@ -329,15 +335,6 @@ mod tests {
         r#"{"model_type":"llama","vocab_size":32000}"#
     }
 
-    fn gguf_bytes(tensor_count: u64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(b"GGUF");
-        bytes.extend(3_u32.to_le_bytes());
-        bytes.extend(tensor_count.to_le_bytes());
-        bytes.extend(4_u64.to_le_bytes());
-        bytes
-    }
-
     fn safetensors_bytes(tensor_name: &str, shape: &[usize]) -> Vec<u8> {
         let data_bytes = shape.iter().product::<usize>() * 4;
         let shape = shape
@@ -398,7 +395,12 @@ mod tests {
     #[cfg(feature = "gguf")]
     #[test]
     fn gguf_backend_rejects_empty_weight_headers() {
-        let assets = TempAssets::new("gguf-empty", "model.gguf", valid_config(), gguf_bytes(0));
+        let assets = TempAssets::new(
+            "gguf-empty",
+            "model.gguf",
+            valid_config(),
+            test_gguf_empty_bytes(),
+        );
         let plan = assets.runtime_plan(AdapterKind::Gguf);
 
         assert_eq!(
