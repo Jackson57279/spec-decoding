@@ -38,6 +38,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 22: Added `src/adapter_weight_preflight.rs` with `AdapterLoadWeightPreflight` and loader-shell helpers that wrap adapter preflight reports with per-weight metadata. Safetensors weights now include feature-gated header summaries when `safetensors` is enabled, while default builds keep the same lightweight dependency profile. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 23: Added a dependency-free GGUF header reader in `src/weight_metadata.rs`, returning version, tensor count, metadata key-value count, and header byte size from the fixed GGUF header. Threaded that summary into `AdapterWeightFilePreflight` so GGUF drafts and targets are represented alongside safetensors metadata. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 24: Added weight-checked metadata loader paths in `src/adapter_loaded.rs`, so adapter loaded metadata can now carry config summaries, tokenizer placeholders, and inspected safetensors/GGUF weight preflight results together before any real model runtime is created. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 25: Added `src/adapter_runtime_plan.rs`, a dependency-free target runtime planning layer that maps weight-checked loaded metadata into backend initialization inputs: adapter kind, model/tokenizer summaries, weight format, weight paths, and safetensors/GGUF metadata summaries. Runtime plans now reject metadata loads that skipped weight preflight, making the real adapter boundary explicit. Verified locally with `sfw cargo fmt`, `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -81,8 +82,8 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 
 Next priorities:
 1. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`.
-2. Define a concrete target runtime plan that maps inspected config/tokenizer/weight metadata into backend initialization inputs.
-3. Add tokenizer encode/decode boundaries.
+2. Start the first feature-gated target runtime implementation behind `TargetModel`, likely a shape-checked placeholder that consumes `AdapterTargetRuntimePlan` before adding heavy inference crates.
+3. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
 4. Add KV-cache-aware target inference shape and batched verification abstractions.
 5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
 6. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
