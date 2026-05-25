@@ -5,6 +5,11 @@ use crate::{
     model::{ModelError, ModelResult, TokenId},
 };
 
+#[cfg(feature = "gguf-llama-cpp")]
+use llama_cpp_2::{
+    llama_backend::LlamaBackend, llama_batch::LlamaBatch, model::LlamaModel, token::LlamaToken,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GgufRuntimeLogits {
     engine: GgufLogitsEngine,
@@ -106,11 +111,7 @@ impl LlamaCppGgufLogitsEngine {
 
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
         let _ = &self.plan;
-        let _ = self.loader.model_params();
-        let _ = self.loader.context_params(prefix.len())?;
-        Err(ModelError::InvalidConfig(
-            "gguf logits evaluator is not implemented",
-        ))
+        self.loader.logits_for_prefix(prefix)
     }
 }
 
@@ -143,12 +144,48 @@ impl LlamaCppModelContextLoader {
         &self,
         prefix_tokens: usize,
     ) -> ModelResult<llama_cpp_2::context::params::LlamaContextParams> {
-        let context_tokens = self.vocab_size.max(prefix_tokens).max(1);
+        let context_tokens = prefix_tokens.max(1);
         let context_tokens = u32::try_from(context_tokens)
             .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp context length is too large"))?;
 
         Ok(llama_cpp_2::context::params::LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(context_tokens)))
+    }
+
+    fn logits_for_prefix(&self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+        if prefix.is_empty() {
+            return Err(ModelError::InvalidConfig(
+                "gguf llama.cpp prefix must not be empty",
+            ));
+        }
+
+        let llama_tokens = llama_tokens_from_prefix(prefix)?;
+        let mut backend = LlamaBackend::init().map_err(|_| {
+            ModelError::InvalidConfig("gguf llama.cpp backend initialization failed")
+        })?;
+        backend.void_logs();
+
+        let model = LlamaModel::load_from_file(&backend, &self.model_path, &self.model_params())
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp model load failed"))?;
+        let actual_vocab = usize::try_from(model.n_vocab())
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp model vocab size is invalid"))?;
+        if actual_vocab != self.vocab_size {
+            return Err(ModelError::InvalidConfig(
+                "gguf llama.cpp model vocab size must match runtime plan",
+            ));
+        }
+
+        let mut context = model
+            .new_context(&backend, self.context_params(prefix.len())?)
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp context creation failed"))?;
+        let mut batch = LlamaBatch::get_one(&llama_tokens)
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp prefix batch is invalid"))?;
+
+        context
+            .decode(&mut batch)
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp decode failed"))?;
+
+        Ok(context.get_logits().to_vec())
     }
 }
 
@@ -240,6 +277,19 @@ fn required_usize(value: Option<usize>, message: &'static str) -> ModelResult<us
     }
 }
 
+#[cfg(feature = "gguf-llama-cpp")]
+fn llama_tokens_from_prefix(prefix: &[TokenId]) -> ModelResult<Vec<LlamaToken>> {
+    prefix
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, token)| {
+            let token = i32::try_from(token).map_err(|_| ModelError::TokenOutOfRange { index })?;
+            Ok(LlamaToken::new(token))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 struct StaticGgufLogitsEngine {
@@ -273,7 +323,7 @@ mod tests {
         adapters::AdapterKind,
         gguf_runtime_logits::GgufRuntimeLogits,
         loading::WeightFormat,
-        model::{ModelError, TokenId},
+        model::ModelError,
     };
 
     fn runtime_plan() -> AdapterTargetRuntimePlan {
@@ -325,7 +375,8 @@ mod tests {
     fn binds_gguf_logits_to_runtime_plan() {
         let mut logits =
             GgufRuntimeLogits::from_runtime_plan(&runtime_plan(), 2).expect("plan should bind");
-        let prefix: &[TokenId] = &[0];
+        #[cfg(not(feature = "gguf-llama-cpp"))]
+        let prefix = &[0];
 
         match &logits.engine {
             #[cfg(feature = "gguf-llama-cpp")]
@@ -341,6 +392,15 @@ mod tests {
             _ => panic!("expected plan-bound engine"),
         }
 
+        #[cfg(feature = "gguf-llama-cpp")]
+        assert_eq!(
+            logits.logits_for_prefix(&[]),
+            Err(ModelError::InvalidConfig(
+                "gguf llama.cpp prefix must not be empty"
+            ))
+        );
+
+        #[cfg(not(feature = "gguf-llama-cpp"))]
         assert_eq!(
             logits.logits_for_prefix(prefix),
             Err(ModelError::InvalidConfig(
