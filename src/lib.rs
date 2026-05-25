@@ -1,3 +1,4 @@
+pub mod decode;
 pub mod model;
 
 pub const CRATE_NAME: &str = "speclative-diffusion";
