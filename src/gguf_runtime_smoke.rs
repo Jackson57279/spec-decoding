@@ -3,8 +3,11 @@ use std::{env, path::PathBuf};
 use crate::{
     adapters::gguf,
     loading::{ModelAssetPaths, ModelLoadRequest},
-    model::{ModelError, TargetModel},
+    model::TargetModel,
 };
+
+#[cfg(not(feature = "gguf-llama-cpp"))]
+use crate::model::ModelError;
 
 const CONFIG_ENV: &str = "SPECLATIVE_DIFFUSION_GGUF_SMOKE_CONFIG";
 const TOKENIZER_ENV: &str = "SPECLATIVE_DIFFUSION_GGUF_SMOKE_TOKENIZER";
@@ -24,6 +27,20 @@ fn env_gated_gguf_backend_smoke_binds_real_assets() {
 
     assert!(!bundle.has_draft());
     assert!(bundle.target.weight_paths().contains(&expected_weight));
+
+    #[cfg(feature = "gguf-llama-cpp")]
+    {
+        let target_vocab = TargetModel::vocab_size(&bundle.target);
+        let logits = bundle
+            .target
+            .logits_for_prefix(&[0])
+            .expect("gguf smoke target should produce logits");
+
+        assert_eq!(logits.len(), target_vocab);
+        assert!(logits.iter().all(|score| score.is_finite()));
+    }
+
+    #[cfg(not(feature = "gguf-llama-cpp"))]
     assert_eq!(
         bundle.target.logits_for_prefix(&[0]),
         Err(ModelError::InvalidConfig(
