@@ -26,10 +26,7 @@ impl ModelAssetPaths {
 
     pub fn validate(&self) -> ModelResult<()> {
         validate_json_file(&self.config_file, "config file must be a JSON file")?;
-        validate_json_file(
-            &self.tokenizer_file,
-            "tokenizer file must be a JSON file",
-        )?;
+        validate_json_file(&self.tokenizer_file, "tokenizer file must be a JSON file")?;
 
         if self.weight_files.is_empty() {
             return Err(ModelError::InvalidConfig(
@@ -154,9 +151,7 @@ mod tests {
                 "/models/qwen/tokenizer.json",
                 vec![PathBuf::from("/models/qwen/model.safetensors")],
             ),
-            Err(ModelError::InvalidConfig(
-                "config file must be a JSON file"
-            ))
+            Err(ModelError::InvalidConfig("config file must be a JSON file"))
         );
         assert_eq!(
             ModelAssetPaths::new(
