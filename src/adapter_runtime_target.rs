@@ -1,7 +1,7 @@
 use crate::{
     adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
-    adapters::AdapterKind,
-    loading::WeightFormat,
+    adapters::{AdapterKind, AdapterLoaderShell},
+    loading::{ModelLoadRequest, WeightFormat},
     model::{ModelError, ModelResult, TargetModel, TokenId},
 };
 
@@ -129,6 +129,25 @@ impl AdapterRuntimeTargetBundle {
     }
 }
 
+impl AdapterLoaderShell {
+    pub fn load_target_runtime_target_bundle(
+        self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterRuntimeTargetBundle> {
+        let plan = self.load_target_runtime_plan_bundle(request)?;
+        AdapterRuntimeTargetBundle::from_runtime_plan_bundle(&plan)
+    }
+
+    pub fn load_with_draft_runtime_target_bundle(
+        self,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterRuntimeTargetBundle> {
+        let plan = self.load_with_draft_runtime_plan_bundle(draft_kind, request)?;
+        AdapterRuntimeTargetBundle::from_runtime_plan_bundle(&plan)
+    }
+}
+
 fn required_text<'a>(value: Option<&'a str>, message: &'static str) -> ModelResult<&'a str> {
     match value {
         Some(value) if !value.is_empty() => Ok(value),
@@ -152,7 +171,7 @@ mod tests {
     };
 
     use crate::{
-        adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
+        adapter_runtime_plan::AdapterTargetRuntimePlan,
         adapter_runtime_target::{AdapterRuntimeTargetBundle, AdapterRuntimeTargetPlaceholder},
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
@@ -260,6 +279,21 @@ mod tests {
     }
 
     #[test]
+    fn loader_shell_builds_target_runtime_target_bundle() {
+        let assets = TempAssets::valid("shell-target");
+        let request = ModelLoadRequest::target_only(assets.paths());
+
+        let bundle = AdapterLoaderShell::new(AdapterKind::Gguf)
+            .load_target_runtime_target_bundle(&request)
+            .expect("runtime target bundle should be built");
+
+        assert!(!bundle.has_draft());
+        assert_eq!(bundle.target.model_type(), "llama");
+        assert_eq!(TargetModel::vocab_size(&bundle.target), 32000);
+        assert_eq!(bundle.target.weight_file_count(), 1);
+    }
+
+    #[test]
     fn runtime_target_rejects_missing_architecture_fields() {
         let assets = TempAssets::new(
             "missing-arch",
@@ -270,6 +304,22 @@ mod tests {
 
         assert_eq!(
             AdapterRuntimeTargetPlaceholder::from_runtime_plan(&plan),
+            Err(ModelError::InvalidConfig("hidden size is required"))
+        );
+    }
+
+    #[test]
+    fn loader_shell_runtime_target_bundle_rejects_incomplete_config() {
+        let assets = TempAssets::new(
+            "shell-missing-arch",
+            r#"{"model_type":"llama","vocab_size":32000}"#,
+            r#"{"model":{"type":"BPE"}}"#,
+        );
+        let request = ModelLoadRequest::target_only(assets.paths());
+
+        assert_eq!(
+            AdapterLoaderShell::new(AdapterKind::Gguf)
+                .load_target_runtime_target_bundle(&request),
             Err(ModelError::InvalidConfig("hidden size is required"))
         );
     }
@@ -360,13 +410,8 @@ mod tests {
         let target = TempAssets::valid("bundle-target");
         let draft = TempAssets::valid("bundle-draft");
         let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
-        let loaded = AdapterLoaderShell::new(AdapterKind::Gguf)
-            .load_with_draft_metadata_with_weight_preflight(AdapterKind::Gguf, &request)
-            .expect("loaded metadata should be built");
-        let plan_bundle = AdapterRuntimePlanBundle::from_loaded_metadata(&loaded)
-            .expect("plan bundle should be built");
-
-        let target_bundle = AdapterRuntimeTargetBundle::from_runtime_plan_bundle(&plan_bundle)
+        let target_bundle = AdapterLoaderShell::new(AdapterKind::Gguf)
+            .load_with_draft_runtime_target_bundle(AdapterKind::Gguf, &request)
             .expect("target bundle should be built");
 
         assert!(target_bundle.has_draft());
