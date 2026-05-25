@@ -13,6 +13,10 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Commit after every file change.
 - Use only Cursor-exposed tools. Do not assume pi-side tools except bridged `pi__*` tools that are exposed in this Cursor run.
 
+## Continuation Progress
+
+- Continuation iteration 1: Added a dependency-free `Tokenizer` trait and `ByteTokenizer` smoke implementation in `src/model.rs` so future HF/Candle/GGUF loaders have a typed encode/decode boundary. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
+
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
 2. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`.
