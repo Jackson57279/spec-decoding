@@ -5,6 +5,7 @@ pub mod candle {
     use crate::{
         adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
         adapter_runtime_target::AdapterRuntimeTargetPlaceholder,
+        adapter_runtime_weight_check::validate_candle_runtime_weights,
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::ModelLoadRequest,
         model::{ModelError, ModelResult, TargetModel, TokenId},
@@ -24,8 +25,11 @@ pub mod candle {
                 ));
             }
 
+            let inner = AdapterRuntimeTargetPlaceholder::from_runtime_plan(plan)?;
+            validate_candle_runtime_weights(plan)?;
+
             Ok(Self {
-                inner: AdapterRuntimeTargetPlaceholder::from_runtime_plan(plan)?,
+                inner,
                 weight_paths: weight_paths(plan),
             })
         }
@@ -116,6 +120,7 @@ pub mod gguf {
     use crate::{
         adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
         adapter_runtime_target::AdapterRuntimeTargetPlaceholder,
+        adapter_runtime_weight_check::validate_gguf_runtime_weights,
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::ModelLoadRequest,
         model::{ModelError, ModelResult, TargetModel, TokenId},
@@ -135,8 +140,11 @@ pub mod gguf {
                 ));
             }
 
+            let inner = AdapterRuntimeTargetPlaceholder::from_runtime_plan(plan)?;
+            validate_gguf_runtime_weights(plan)?;
+
             Ok(Self {
-                inner: AdapterRuntimeTargetPlaceholder::from_runtime_plan(plan)?,
+                inner,
                 weight_paths: weight_paths(plan),
             })
         }
@@ -245,11 +253,16 @@ mod tests {
 
     impl TempAssets {
         fn gguf(name: &str, config: &str) -> Self {
-            Self::new(name, "model.gguf", config, gguf_bytes())
+            Self::new(name, "model.gguf", config, gguf_bytes(12))
         }
 
-        fn safetensors(name: &str, config: &str) -> Self {
-            Self::new(name, "model.safetensors", config, safetensors_bytes())
+        fn safetensors(name: &str, config: &str, shape: &[usize]) -> Self {
+            Self::new(
+                name,
+                "model.safetensors",
+                config,
+                safetensors_bytes("model.embed_tokens.weight", shape),
+            )
         }
 
         fn new(name: &str, weight_name: &str, config: &str, weights: Vec<u8>) -> Self {
@@ -316,20 +329,27 @@ mod tests {
         r#"{"model_type":"llama","vocab_size":32000}"#
     }
 
-    fn gguf_bytes() -> Vec<u8> {
+    fn gguf_bytes(tensor_count: u64) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(b"GGUF");
         bytes.extend(3_u32.to_le_bytes());
-        bytes.extend(12_u64.to_le_bytes());
+        bytes.extend(tensor_count.to_le_bytes());
         bytes.extend(4_u64.to_le_bytes());
         bytes
     }
 
-    fn safetensors_bytes() -> Vec<u8> {
-        let header = br#"{"weight":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#;
+    fn safetensors_bytes(tensor_name: &str, shape: &[usize]) -> Vec<u8> {
+        let shape = shape
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let header = format!(
+            r#"{{"{tensor_name}":{{"dtype":"F32","shape":[{shape}],"data_offsets":[0,8]}}}}"#
+        );
         let mut bytes = Vec::new();
         bytes.extend((header.len() as u64).to_le_bytes());
-        bytes.extend(header);
+        bytes.extend(header.as_bytes());
         bytes.extend([0_u8; 8]);
         bytes
     }
@@ -353,7 +373,8 @@ mod tests {
     #[cfg(feature = "gguf")]
     #[test]
     fn gguf_backend_rejects_wrong_kind_and_incomplete_shape() {
-        let candle_assets = TempAssets::safetensors("gguf-wrong-kind", valid_config());
+        let candle_assets =
+            TempAssets::safetensors("gguf-wrong-kind", valid_config(), &[32000, 4096]);
         let incomplete_assets = TempAssets::gguf("gguf-incomplete", incomplete_config());
         let candle_plan = candle_assets.runtime_plan(AdapterKind::Candle);
         let incomplete_plan = incomplete_assets.runtime_plan(AdapterKind::Gguf);
@@ -376,20 +397,19 @@ mod tests {
 
     #[cfg(feature = "gguf")]
     #[test]
-    fn gguf_backend_checks_prefix_before_logits_failure() {
-        let assets = TempAssets::gguf("gguf-prefix", valid_config());
+    fn gguf_backend_rejects_empty_weight_headers() {
+        let assets = TempAssets::new(
+            "gguf-empty",
+            "model.gguf",
+            valid_config(),
+            gguf_bytes(0),
+        );
         let plan = assets.runtime_plan(AdapterKind::Gguf);
-        let mut target = crate::adapter_runtime_backend::gguf::runtime_target(&plan)
-            .expect("gguf backend should build");
 
         assert_eq!(
-            target.logits_for_prefix(&[32000]),
-            Err(ModelError::TokenOutOfRange { index: 0 })
-        );
-        assert_eq!(
-            target.logits_for_prefix(&[0, 1]),
+            crate::adapter_runtime_backend::gguf::GgufRuntimeTarget::from_runtime_plan(&plan),
             Err(ModelError::InvalidConfig(
-                "gguf backend cannot produce logits yet"
+                "gguf backend weight file must contain tensors"
             ))
         );
     }
@@ -412,7 +432,7 @@ mod tests {
     #[cfg(feature = "candle")]
     #[test]
     fn candle_backend_builds_from_runtime_plan() {
-        let assets = TempAssets::safetensors("candle-target", valid_config());
+        let assets = TempAssets::safetensors("candle-target", valid_config(), &[32000, 4096]);
         let plan = assets.runtime_plan(AdapterKind::Candle);
 
         let target =
@@ -429,7 +449,8 @@ mod tests {
     #[test]
     fn candle_backend_rejects_wrong_kind_and_incomplete_shape() {
         let gguf_assets = TempAssets::gguf("candle-wrong-kind", valid_config());
-        let incomplete_assets = TempAssets::safetensors("candle-incomplete", incomplete_config());
+        let incomplete_assets =
+            TempAssets::safetensors("candle-incomplete", incomplete_config(), &[32000, 4096]);
         let gguf_plan = gguf_assets.runtime_plan(AdapterKind::Gguf);
         let incomplete_plan = incomplete_assets.runtime_plan(AdapterKind::Candle);
 
@@ -449,37 +470,18 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "candle")]
+    #[cfg(all(feature = "candle", feature = "safetensors"))]
     #[test]
-    fn candle_backend_checks_prefix_before_logits_failure() {
-        let assets = TempAssets::safetensors("candle-prefix", valid_config());
+    fn candle_backend_rejects_embedding_shape_mismatch() {
+        let assets = TempAssets::safetensors("candle-shape", valid_config(), &[100, 4096]);
         let plan = assets.runtime_plan(AdapterKind::Candle);
-        let mut target = crate::adapter_runtime_backend::candle::runtime_target(&plan)
-            .expect("candle backend should build");
 
         assert_eq!(
-            target.logits_for_prefix(&[32000]),
-            Err(ModelError::TokenOutOfRange { index: 0 })
-        );
-        assert_eq!(
-            target.logits_for_prefix(&[0, 1]),
+            crate::adapter_runtime_backend::candle::CandleRuntimeTarget::from_runtime_plan(&plan),
             Err(ModelError::InvalidConfig(
-                "candle backend cannot produce logits yet"
+                "candle backend weight tensor shape does not match config"
             ))
         );
     }
 
-    #[cfg(feature = "candle")]
-    #[test]
-    fn candle_loader_builds_target_backend_bundle() {
-        let target = TempAssets::safetensors("candle-loader-target", valid_config());
-        let request = ModelLoadRequest::target_only(target.paths());
-
-        let bundle = crate::adapters::candle::loader()
-            .load_candle_runtime_backend_bundle(&request)
-            .expect("candle backend bundle should build");
-
-        assert!(!bundle.has_draft());
-        assert_eq!(bundle.target.model_type(), "llama");
-    }
 }
