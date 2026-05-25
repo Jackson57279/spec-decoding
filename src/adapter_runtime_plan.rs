@@ -32,6 +32,8 @@ pub struct AdapterRuntimeGgufPlan {
     pub tensor_count: u64,
     pub metadata_kv_count: u64,
     pub header_bytes: usize,
+    pub architecture: Option<String>,
+    pub parsed_tensor_count: usize,
 }
 
 impl AdapterRuntimeGgufPlan {
@@ -41,6 +43,8 @@ impl AdapterRuntimeGgufPlan {
             tensor_count: metadata.tensor_count,
             metadata_kv_count: metadata.metadata_kv_count,
             header_bytes: metadata.header_bytes,
+            architecture: metadata.architecture.clone(),
+            parsed_tensor_count: metadata.tensors.len(),
         }
     }
 }
@@ -187,6 +191,7 @@ mod tests {
     use crate::{
         adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_parse::test_gguf_bytes,
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::ModelError,
     };
@@ -229,7 +234,11 @@ mod tests {
                 r#"{"model":{"type":"BPE","vocab":{"hello":0,"world":1}}}"#,
             )
             .expect("tokenizer should be written");
-            write(&weights, Self::gguf_bytes()).expect("weights should be written");
+            write(
+                &weights,
+                test_gguf_bytes(Some("llama"), "token_embd.weight", &[4096, 32000]),
+            )
+            .expect("weights should be written");
 
             Self {
                 root,
@@ -248,14 +257,6 @@ mod tests {
             .expect("asset paths should be valid")
         }
 
-        fn gguf_bytes() -> Vec<u8> {
-            let mut bytes = Vec::new();
-            bytes.extend(b"GGUF");
-            bytes.extend(3_u32.to_le_bytes());
-            bytes.extend(12_u64.to_le_bytes());
-            bytes.extend(4_u64.to_le_bytes());
-            bytes
-        }
     }
 
     impl Drop for TempAssets {
@@ -289,7 +290,16 @@ mod tests {
                 .as_ref()
                 .expect("gguf plan")
                 .tensor_count,
-            12
+            1
+        );
+        assert_eq!(
+            plan.weights[0]
+                .gguf
+                .as_ref()
+                .expect("gguf plan")
+                .architecture
+                .as_deref(),
+            Some("llama")
         );
     }
 
@@ -313,7 +323,7 @@ mod tests {
                 .as_ref()
                 .expect("gguf metadata")
                 .metadata_kv_count,
-            4
+            1
         );
     }
 
@@ -335,7 +345,7 @@ mod tests {
                 .as_ref()
                 .expect("gguf metadata")
                 .tensor_count,
-            12
+            1
         );
     }
 
@@ -357,7 +367,7 @@ mod tests {
                 .as_ref()
                 .expect("gguf metadata")
                 .metadata_kv_count,
-            4
+            1
         );
     }
 
