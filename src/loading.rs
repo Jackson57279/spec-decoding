@@ -12,6 +12,12 @@ pub struct ModelAssetPaths {
     pub weight_files: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeightFormat {
+    SafeTensors,
+    Gguf,
+}
+
 impl ModelAssetPaths {
     pub fn new(
         config_file: impl Into<PathBuf>,
@@ -31,17 +37,28 @@ impl ModelAssetPaths {
         validate_json_file(&self.config_file, "config file must be a JSON file")?;
         validate_json_file(&self.tokenizer_file, "tokenizer file must be a JSON file")?;
 
-        if self.weight_files.is_empty() {
-            return Err(ModelError::InvalidConfig(
-                "at least one weight file is required",
-            ));
-        }
-
-        for weight_file in &self.weight_files {
-            validate_weight_file(weight_file)?;
-        }
+        self.weight_format()?;
 
         Ok(())
+    }
+
+    pub fn weight_format(&self) -> ModelResult<WeightFormat> {
+        let mut format = None;
+
+        for weight_file in &self.weight_files {
+            let current = weight_format_for_file(weight_file)?;
+            if format.is_some_and(|expected| expected != current) {
+                return Err(ModelError::InvalidConfig(
+                    "weight files must use one format per model",
+                ));
+            }
+
+            format = Some(current);
+        }
+
+        format.ok_or(ModelError::InvalidConfig(
+            "at least one weight file is required",
+        ))
     }
 }
 
@@ -170,9 +187,13 @@ fn validate_json_file(path: &Path, message: &'static str) -> ModelResult<()> {
     Ok(())
 }
 
-fn validate_weight_file(path: &Path) -> ModelResult<()> {
-    if has_extension(path, "safetensors") || has_extension(path, "gguf") {
-        return Ok(());
+fn weight_format_for_file(path: &Path) -> ModelResult<WeightFormat> {
+    if has_extension(path, "safetensors") {
+        return Ok(WeightFormat::SafeTensors);
+    }
+
+    if has_extension(path, "gguf") {
+        return Ok(WeightFormat::Gguf);
     }
 
     Err(ModelError::InvalidConfig(
@@ -192,7 +213,10 @@ mod tests {
 
     use crate::{
         drafters::{DraftSequence, Drafter},
-        loading::{LoadedModel, LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader},
+        loading::{
+            LoadedModel, LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader,
+            WeightFormat,
+        },
         model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
     };
 
@@ -215,6 +239,7 @@ mod tests {
             PathBuf::from("/models/qwen/tokenizer.json")
         );
         assert_eq!(paths.weight_files.len(), 1);
+        assert_eq!(paths.weight_format(), Ok(WeightFormat::SafeTensors));
     }
 
     #[test]
@@ -225,7 +250,10 @@ mod tests {
             vec![PathBuf::from("/models/tiny/model.GGUF")],
         );
 
-        assert!(paths.is_ok());
+        assert_eq!(
+            paths.expect("valid gguf assets").weight_format(),
+            Ok(WeightFormat::Gguf)
+        );
     }
 
     #[test]
@@ -270,6 +298,23 @@ mod tests {
             ),
             Err(ModelError::InvalidConfig(
                 "at least one weight file is required"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_weight_formats() {
+        assert_eq!(
+            ModelAssetPaths::new(
+                "/models/qwen/config.json",
+                "/models/qwen/tokenizer.json",
+                vec![
+                    PathBuf::from("/models/qwen/model-00001.safetensors"),
+                    PathBuf::from("/models/qwen/model-00002.gguf"),
+                ],
+            ),
+            Err(ModelError::InvalidConfig(
+                "weight files must use one format per model"
             ))
         );
     }
