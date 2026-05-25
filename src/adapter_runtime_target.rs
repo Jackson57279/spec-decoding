@@ -86,6 +86,16 @@ impl AdapterRuntimeTargetPlaceholder {
     pub fn weight_file_count(&self) -> usize {
         self.weight_file_count
     }
+
+    pub fn validate_prefix(&self, prefix: &[TokenId]) -> ModelResult<()> {
+        for (index, token) in prefix.iter().copied().enumerate() {
+            if token as usize >= self.vocab_size {
+                return Err(ModelError::TokenOutOfRange { index });
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl TargetModel for AdapterRuntimeTargetPlaceholder {
@@ -94,11 +104,7 @@ impl TargetModel for AdapterRuntimeTargetPlaceholder {
     }
 
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
-        for (index, token) in prefix.iter().copied().enumerate() {
-            if token as usize >= self.vocab_size {
-                return Err(ModelError::TokenOutOfRange { index });
-            }
-        }
+        self.validate_prefix(prefix)?;
 
         Err(ModelError::InvalidConfig(
             "runtime target cannot produce logits",
