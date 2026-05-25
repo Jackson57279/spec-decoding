@@ -1,8 +1,9 @@
 use std::{fs, path::Path};
 
-use crate::model::{ModelError, ModelResult};
-
-const GGUF_HEADER_BYTES: usize = 24;
+use crate::{
+    gguf_parse::{ParsedGgufTensorInfo, parse_gguf_file},
+    model::{ModelError, ModelResult},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WeightTensorMetadata {
@@ -31,6 +32,27 @@ pub struct GgufFileMetadata {
     pub tensor_count: u64,
     pub metadata_kv_count: u64,
     pub header_bytes: usize,
+    pub architecture: Option<String>,
+    pub tensors: Vec<GgufTensorMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GgufTensorMetadata {
+    pub name: String,
+    pub shape: Vec<usize>,
+    pub ggml_type: u32,
+    pub offset: u64,
+}
+
+impl From<ParsedGgufTensorInfo> for GgufTensorMetadata {
+    fn from(value: ParsedGgufTensorInfo) -> Self {
+        Self {
+            name: value.name,
+            shape: value.shape,
+            ggml_type: value.ggml_type,
+            offset: value.offset,
+        }
+    }
 }
 
 pub fn read_gguf_file_metadata(path: &Path) -> ModelResult<GgufFileMetadata> {
@@ -41,32 +63,14 @@ pub fn read_gguf_file_metadata(path: &Path) -> ModelResult<GgufFileMetadata> {
 }
 
 fn parse_gguf_file_metadata(buffer: &[u8]) -> ModelResult<GgufFileMetadata> {
-    if buffer.len() < GGUF_HEADER_BYTES || &buffer[0..4] != b"GGUF" {
-        return Err(ModelError::InvalidConfig("invalid gguf metadata"));
-    }
-
-    let version = u32::from_le_bytes(
-        buffer[4..8]
-            .try_into()
-            .expect("gguf version field should be 4 bytes"),
-    );
-    if version == 0 {
-        return Err(ModelError::InvalidConfig("invalid gguf metadata"));
-    }
-
+    let parsed = parse_gguf_file(buffer)?;
     Ok(GgufFileMetadata {
-        version,
-        tensor_count: u64::from_le_bytes(
-            buffer[8..16]
-                .try_into()
-                .expect("gguf tensor count field should be 8 bytes"),
-        ),
-        metadata_kv_count: u64::from_le_bytes(
-            buffer[16..24]
-                .try_into()
-                .expect("gguf metadata count field should be 8 bytes"),
-        ),
-        header_bytes: GGUF_HEADER_BYTES,
+        version: parsed.version,
+        tensor_count: parsed.tensor_count,
+        metadata_kv_count: parsed.metadata_kv_count,
+        header_bytes: parsed.header_bytes,
+        architecture: parsed.architecture,
+        tensors: parsed.tensors.into_iter().map(Into::into).collect(),
     })
 }
 
@@ -105,8 +109,9 @@ mod tests {
     };
 
     use crate::{
+        gguf_parse::test_gguf_bytes,
         model::ModelError,
-        weight_metadata::{GgufFileMetadata, read_gguf_file_metadata},
+        weight_metadata::read_gguf_file_metadata,
     };
 
     #[cfg(feature = "safetensors")]
@@ -144,28 +149,23 @@ mod tests {
         }
     }
 
-    fn gguf_bytes(version: u32, tensor_count: u64, metadata_kv_count: u64) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(b"GGUF");
-        bytes.extend(version.to_le_bytes());
-        bytes.extend(tensor_count.to_le_bytes());
-        bytes.extend(metadata_kv_count.to_le_bytes());
-        bytes
-    }
-
     #[test]
     fn reads_gguf_file_metadata() {
-        let file = TempWeightFile::new("gguf-valid", "model.gguf", gguf_bytes(3, 12, 4));
-
-        assert_eq!(
-            read_gguf_file_metadata(&file.path),
-            Ok(GgufFileMetadata {
-                version: 3,
-                tensor_count: 12,
-                metadata_kv_count: 4,
-                header_bytes: 24,
-            })
+        let file = TempWeightFile::new(
+            "gguf-valid",
+            "model.gguf",
+            test_gguf_bytes(Some("llama"), "token_embd.weight", &[4, 2]),
         );
+
+        let metadata = read_gguf_file_metadata(&file.path).expect("metadata should parse");
+
+        assert_eq!(metadata.version, 3);
+        assert_eq!(metadata.tensor_count, 1);
+        assert_eq!(metadata.metadata_kv_count, 1);
+        assert!(metadata.header_bytes > 24);
+        assert_eq!(metadata.architecture.as_deref(), Some("llama"));
+        assert_eq!(metadata.tensors[0].name, "token_embd.weight");
+        assert_eq!(metadata.tensors[0].shape, vec![4, 2]);
     }
 
     #[test]
