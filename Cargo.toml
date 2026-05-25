@@ -8,4 +8,9 @@ license = "MIT OR Apache-2.0"
 name = "speclative_diffusion"
 path = "src/lib.rs"
 
+[features]
+default = []
+candle = []
+gguf = []
+
 [dependencies]
