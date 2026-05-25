@@ -319,8 +319,8 @@ mod tests {
     fn valid_config() -> &'static str {
         r#"{
             "model_type": "llama",
-            "vocab_size": 32000,
-            "hidden_size": 4096,
+            "vocab_size": 2,
+            "hidden_size": 4,
             "num_hidden_layers": 32
         }"#
     }
@@ -339,18 +339,19 @@ mod tests {
     }
 
     fn safetensors_bytes(tensor_name: &str, shape: &[usize]) -> Vec<u8> {
+        let data_bytes = shape.iter().product::<usize>() * 4;
         let shape = shape
             .iter()
             .map(usize::to_string)
             .collect::<Vec<_>>()
             .join(",");
         let header = format!(
-            r#"{{"{tensor_name}":{{"dtype":"F32","shape":[{shape}],"data_offsets":[0,8]}}}}"#
+            r#"{{"{tensor_name}":{{"dtype":"F32","shape":[{shape}],"data_offsets":[0,{data_bytes}]}}}}"#
         );
         let mut bytes = Vec::new();
         bytes.extend((header.len() as u64).to_le_bytes());
         bytes.extend(header.as_bytes());
-        bytes.extend([0_u8; 8]);
+        bytes.extend(vec![0_u8; data_bytes]);
         bytes
     }
 
@@ -365,7 +366,7 @@ mod tests {
                 .expect("gguf backend should build");
 
         assert_eq!(target.model_type(), "llama");
-        assert_eq!(TargetModel::vocab_size(&target), 32000);
+        assert_eq!(TargetModel::vocab_size(&target), 2);
         assert_eq!(target.weight_file_count(), 1);
         assert!(target.weight_paths().contains(&assets.weights));
     }
@@ -373,8 +374,7 @@ mod tests {
     #[cfg(feature = "gguf")]
     #[test]
     fn gguf_backend_rejects_wrong_kind_and_incomplete_shape() {
-        let candle_assets =
-            TempAssets::safetensors("gguf-wrong-kind", valid_config(), &[32000, 4096]);
+        let candle_assets = TempAssets::safetensors("gguf-wrong-kind", valid_config(), &[2, 4]);
         let incomplete_assets = TempAssets::gguf("gguf-incomplete", incomplete_config());
         let candle_plan = candle_assets.runtime_plan(AdapterKind::Candle);
         let incomplete_plan = incomplete_assets.runtime_plan(AdapterKind::Gguf);
@@ -398,12 +398,7 @@ mod tests {
     #[cfg(feature = "gguf")]
     #[test]
     fn gguf_backend_rejects_empty_weight_headers() {
-        let assets = TempAssets::new(
-            "gguf-empty",
-            "model.gguf",
-            valid_config(),
-            gguf_bytes(0),
-        );
+        let assets = TempAssets::new("gguf-empty", "model.gguf", valid_config(), gguf_bytes(0));
         let plan = assets.runtime_plan(AdapterKind::Gguf);
 
         assert_eq!(
@@ -432,7 +427,7 @@ mod tests {
     #[cfg(feature = "candle")]
     #[test]
     fn candle_backend_builds_from_runtime_plan() {
-        let assets = TempAssets::safetensors("candle-target", valid_config(), &[32000, 4096]);
+        let assets = TempAssets::safetensors("candle-target", valid_config(), &[2, 4]);
         let plan = assets.runtime_plan(AdapterKind::Candle);
 
         let target =
@@ -440,7 +435,7 @@ mod tests {
                 .expect("candle backend should build");
 
         assert_eq!(target.model_type(), "llama");
-        assert_eq!(TargetModel::vocab_size(&target), 32000);
+        assert_eq!(TargetModel::vocab_size(&target), 2);
         assert_eq!(target.weight_file_count(), 1);
         assert!(target.weight_paths().contains(&assets.weights));
     }
@@ -450,7 +445,7 @@ mod tests {
     fn candle_backend_rejects_wrong_kind_and_incomplete_shape() {
         let gguf_assets = TempAssets::gguf("candle-wrong-kind", valid_config());
         let incomplete_assets =
-            TempAssets::safetensors("candle-incomplete", incomplete_config(), &[32000, 4096]);
+            TempAssets::safetensors("candle-incomplete", incomplete_config(), &[2, 4]);
         let gguf_plan = gguf_assets.runtime_plan(AdapterKind::Gguf);
         let incomplete_plan = incomplete_assets.runtime_plan(AdapterKind::Candle);
 
@@ -473,7 +468,7 @@ mod tests {
     #[cfg(all(feature = "candle", feature = "safetensors"))]
     #[test]
     fn candle_backend_rejects_embedding_shape_mismatch() {
-        let assets = TempAssets::safetensors("candle-shape", valid_config(), &[100, 4096]);
+        let assets = TempAssets::safetensors("candle-shape", valid_config(), &[3, 4]);
         let plan = assets.runtime_plan(AdapterKind::Candle);
 
         assert_eq!(
@@ -483,5 +478,4 @@ mod tests {
             ))
         );
     }
-
 }
