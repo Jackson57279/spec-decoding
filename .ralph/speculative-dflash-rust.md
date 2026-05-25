@@ -26,6 +26,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 9: Added `AdapterModelPlan` and `AdapterLoadPlan` in `src/adapters.rs` so target-only and target-plus-draft load requests can be validated against Candle/GGUF adapter kinds before real loaders are wired in. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 - Continuation iteration 10: Added `src/asset_files.rs` with filesystem preflight helpers for config, tokenizer, and weight files, then exported it from `src/lib.rs` so adapter loaders can fail before opening missing model assets. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 - Continuation iteration 11: Added `serde_json` plus `src/config.rs` for lightweight model and tokenizer JSON summaries, including regular-file validation before parsing, then exported it from `src/lib.rs`. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 12: Extended `src/config.rs` with `ModelAssetSummary` and `read_model_asset_summary` so a `ModelAssetPaths` value can produce model config, tokenizer config, weight format, and shard-count metadata in one preflight step. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -42,6 +43,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Blocking or weak spots: No actual Candle, safetensors, tokenizer JSON, or GGUF parsing code exists yet. The next changes will need careful dependency selection and may lengthen builds.
 - Approach adjustment: Add thin feature-gated adapter skeletons before adding real dependencies, then add only the smallest dependency set needed for config/tokenizer smoke parsing.
 - Next priorities: Create adapter module boundaries under `src/`, wire them through the new Cargo features, and keep real model loading behind traits.
+
+## Continuation Reflection 3
+
+- Accomplished: Added adapter dispatch planning, asset file existence preflight, structured JSON summaries, and a combined asset summary path for model/tokenizer metadata.
+- Working well: The loader path is now more than extension validation: it can check files, parse lightweight JSON, and verify adapter/format compatibility before heavy inference dependencies are involved. Local and remote checks pass with 59 tests.
+- Blocking or weak spots: The project still has no real model weights reader, tokenizer implementation beyond byte-level smoke tests, or Candle/GGUF target model implementation. Dependency scope will start to matter soon.
+- Approach adjustment: Keep one more layer of dependency-light preflight around load requests, then add the first real optional dependency only when a minimal end-to-end adapter smoke test needs it.
+- Next priorities: Combine adapter plans, filesystem checks, and JSON summaries into a single load preflight report, then use that report to drive the first feature-gated Candle/GGUF loader shell.
 
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
