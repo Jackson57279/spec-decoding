@@ -9,6 +9,7 @@ pub mod loading;
 pub mod model;
 pub mod runtime;
 pub mod spec_decode;
+pub mod weight_metadata;
 
 pub const CRATE_NAME: &str = "speclative-diffusion";
 
