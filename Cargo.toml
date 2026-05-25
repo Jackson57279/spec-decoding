@@ -12,11 +12,12 @@ path = "src/lib.rs"
 default = []
 candle = []
 gguf = []
-gguf-llama-cpp = ["gguf"]
+gguf-llama-cpp = ["gguf", "dep:llama-cpp-2"]
 tokenizers = ["dep:tokenizers"]
 safetensors = ["dep:safetensors"]
 
 [dependencies]
+llama-cpp-2 = { version = "0.1.146", default-features = false, optional = true }
 safetensors = { version = "0.7.0", optional = true }
 serde_json = "1.0.150"
 tokenizers = { version = "0.23.1", default-features = false, optional = true, features = ["fancy-regex"] }
