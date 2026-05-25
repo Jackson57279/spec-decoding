@@ -144,7 +144,10 @@ mod tests {
     struct PrefixFeatureExtractor;
 
     impl TargetFeatureExtractor for PrefixFeatureExtractor {
-        fn extract_target_features(&mut self, prefix: &[TokenId]) -> Result<TargetFeatureWindow, ModelError> {
+        fn extract_target_features(
+            &mut self,
+            prefix: &[TokenId],
+        ) -> Result<TargetFeatureWindow, ModelError> {
             TargetFeatureWindow::new(
                 prefix.len().max(1),
                 2,
