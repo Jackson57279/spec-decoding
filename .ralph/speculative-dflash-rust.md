@@ -1,33 +1,23 @@
-Deep research speculative decoding and DFlash. Goal: design and implement a better custom Rust-first version suitable for full-model speculative decoding, not just draft-only HF models. Constraints: use only Cursor-exposed tools; use real web/search tools before claiming research; workspace currently /home/dih/speclative-diffusion is not a git repo; commits requested after every file change, so resolve repo initialization/location before editing; do not start dev servers; run build/check commands only; prefer remote execution on ai@192.168.1.73 if safe and available; max 100 iterations.
+Continue the existing speculative-dflash-rust work for up to 100 Ralph iterations.
 
-## Progress
+Primary goal: deep research speculative decoding and DFlash, and build a better custom Rust-first version suitable for full target-model speculative decoding, not draft-only HF artifacts.
 
-- Iteration 1: Confirmed the workspace was not a git repository, initialized `/home/dih/speclative-diffusion`, and committed `.gitignore` so generated `.crew` state, Ralph state JSON, and Rust `target/` output stay out of commits.
-- Iteration 2: Added the initial Rust crate skeleton with `Cargo.toml`, `src/lib.rs`, and Cargo's generated lockfile as separate commits. Verified the skeleton with `sfw cargo fmt --check` and `sfw cargo test`.
-- Iteration 3: Added typed Rust model primitives in `src/model.rs`, exported them from `src/lib.rs`, and covered generation config plus greedy-token selection with unit tests. Verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints. Confirmed `ai@192.168.1.73` is reachable, but the initial remote tooling check did not find the expected `sfw`/`cargo` commands after login.
-- Iteration 4: Added `src/decode.rs` with the baseline greedy autoregressive decoder and exported it from `src/lib.rs`. Verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced to `/home/ai/speclative-diffusion` and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test` because `sfw` is not installed there.
-- Iteration 5: Added `src/drafters.rs` with a `Drafter` trait, `DraftSequence`, and a custom prompt-lookup drafter for training-free speculative candidates. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test`.
-- Iteration 7: Added `src/spec_decode.rs` with a greedy speculative verification loop over `TargetModel` and `Drafter`, including accepted/rejected draft metrics, empty-draft fallback, and bonus target-token behavior after full draft acceptance. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test`.
-- Iteration 8: Added `src/block_draft.rs` with `TargetFeatureWindow`, `BlockDraftRequest`, and `BlockDrafter` to model DFlash-style target-feature-conditioned block drafting without adding heavy inference dependencies yet. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test`.
-- Iteration 9: Added a `TargetFeatureExtractor` boundary in `src/block_draft.rs` so real target-model adapters can expose hidden features for DFlash-style block drafting without changing the block drafter API. Verified locally with `sfw cargo fmt --check`, `sfw cargo test`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test`.
-- Iteration 10: Added `FeatureConditionedDrafter` in `src/block_draft.rs` to adapt a `TargetFeatureExtractor` plus `BlockDrafter` into the existing `Drafter` trait used by speculative verification. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
-- Iteration 12: Added efficiency helpers to `SpeculativeStats` for acceptance rate, rejection rate, generated tokens per target forward, and accepted tokens per round. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
-- Iteration 13: Added `src/runtime.rs` with `RuntimeConfig`, `DecodeMode`, and `DrafterBackend` validation for greedy and speculative execution, including the current greedy-temperature constraint. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
-- Iteration 14: Added `src/loading.rs` with `ModelAssetPaths` and `ModelLoadRequest` for validating target/draft `config.json`, `tokenizer.json`, and safetensors/GGUF weight paths before adding actual model loader dependencies. Exported it from `src/lib.rs`, verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
-- Iteration 15: Added a `ModelLoader` trait and `LoadedModelBundle` in `src/loading.rs` so real Candle/GGUF adapters can load typed target and optional draft models behind the existing `TargetModel` and `Drafter` traits. Verified locally with `sfw cargo fmt`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` by sourcing Cargo's environment and running `cargo fmt --check` plus `cargo test -q`.
+Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-rust.md`:
+- Repo initialized and committed file-by-file.
+- Rust crate with dependency-free control plane is in place.
+- Implemented: `TargetModel`, greedy decoding, prompt-lookup drafter, greedy speculative verifier, speculative metrics, runtime config, DFlash-style block draft interfaces, target feature extraction, feature-conditioned drafter adapter, model asset path validation, `ModelLoader` trait, and `LoadedModelBundle`.
+- Local verification uses `sfw cargo fmt --check` and `sfw cargo test -q`.
+- Remote verification runs on `ai@192.168.1.73` with password `machine`; use `sshpass`, sync to `/home/ai/speclative-diffusion`, source `$HOME/.cargo/env` when needed, then run `cargo fmt --check` and `cargo test -q`.
+- Remote host does not have `sfw`; local commands should use `sfw` where applicable.
+- Do not start development servers. Build/check/test only.
+- Commit after every file change.
+- Use only Cursor-exposed tools. Do not assume pi-side tools except bridged `pi__*` tools that are exposed in this Cursor run.
 
-## Reflection 1
-
-- Accomplished: Bootstrapped the repository, established a Rust crate, added typed model/generation primitives, built a baseline greedy decoder, and added the first drafter boundary with a prompt-lookup implementation.
-- Working well: Small commits after each file change are keeping history reviewable, the test suite is fast, and remote verification on `ai@192.168.1.73` works after syncing the repo.
-- Blocking or weak spots: The remote host has `cargo` but not `sfw`, so remote package/tool execution is less locked down than local execution. The runtime still uses mock/scripted model tests; no real HF/Candle model loading exists yet.
-- Approach adjustment: Continue the narrow Rust-first path, but add the speculative verification loop before pulling in heavy Candle dependencies. That keeps the lossless acceptance logic testable independent of GPU/model integration.
-- Next priorities: Implement speculative verification metrics using the existing `TargetModel` and `Drafter` traits, then add a DFlash-style block drafter interface and only after that wire in actual model loading.
-
-## Reflection 2
-
-- Accomplished: The runtime now has a complete dependency-free control plane: baseline greedy decoding, prompt-lookup drafting, greedy speculative verification, DFlash-style block drafting request types, target feature extraction, and an adapter that lets block drafters participate in the verifier through the generic `Drafter` trait.
-- Working well: The abstractions are still small and testable, with 21 local/remote tests passing after iteration 10. The separation between `TargetModel`, `TargetFeatureExtractor`, `Drafter`, and `BlockDrafter` should make the later Candle/HF integration less invasive.
-- Blocking or weak spots: The implementation is still algorithmic scaffolding only. It does not yet load tokenizer/model files, preserve KV cache state, run batched target verification, or implement probabilistic/speculative sampling acceptance.
-- Approach adjustment: Keep one more pure-Rust scaffolding layer for configuration/metrics before adding dependencies. Then add HF/Candle integration behind traits instead of rewriting the verified control flow.
-- Next priorities: Add runtime configuration and richer metric reporting for acceptance rate and target-forward efficiency, then introduce a model-loading adapter layer for tokenizer/config/weights paths.
+Next priorities:
+1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
+2. Introduce Hugging Face/Candle or GGUF-backed target model implementations behind `TargetModel`.
+3. Add tokenizer encode/decode boundaries.
+4. Add KV-cache-aware target inference shape and batched verification abstractions.
+5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
+6. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
+7. Keep tests focused, run local and remote verification each implementation iteration, and update the Ralph task file with progress/reflections.
