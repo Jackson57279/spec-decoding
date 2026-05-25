@@ -21,6 +21,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 4: Added `TargetBatch` and `BatchedTargetModel` in `src/model.rs`, including a sequential fallback for existing `TargetModel` implementations and a helper for draft-token verification prefixes. Verified locally with `sfw cargo fmt`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 - Continuation iteration 5: Added `KvCacheState`, `CachedTargetRequest`, and `CachedTargetModel` in `src/model.rs` so future real-model adapters can preserve KV cache state across target verification calls while current `TargetModel` implementations use a sequential fallback. Verified locally with `sfw cargo fmt`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 - Continuation iteration 6: Added `speculative_greedy_decode_batched` in `src/spec_decode.rs` so drafted tokens can be verified through `TargetBatch` in one counted target pass while preserving the existing sequential decoder. Verified locally with `sfw cargo fmt`, `sfw cargo test -q`, and lints, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
+- Continuation iteration 7: Added empty `candle` and `gguf` Cargo feature gates so upcoming adapter modules can be conditionally compiled without pulling heavy dependencies into the verified core yet. Verified locally with `sfw cargo fmt --check` and `sfw cargo test -q`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check` and `cargo test -q`.
 
 ## Continuation Reflection 1
 
@@ -29,6 +30,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Blocking or weak spots: Real model loading is still not wired in. Batched and cached traits currently have fallback behavior, but no Candle/GGUF adapter takes advantage of true batch execution or real KV cache reuse yet.
 - Approach adjustment: Keep the next steps focused on adapter contracts and optional dependency gates before pulling in heavier inference crates.
 - Next priorities: Add feature-gated adapter modules for safetensors/Candle and GGUF, then begin a minimal tokenizer/config parsing smoke path behind the existing loader trait.
+
+## Continuation Reflection 2
+
+- Accomplished: The runtime now has explicit feature gates ready for adapter work, while keeping dependency-free speculative control flow, batching, cache state, loading assets, and tokenizer boundaries stable.
+- Working well: Verification remains fast, and both local and remote checks are green with 43 tests. The adapter work can now proceed incrementally behind Cargo features.
+- Blocking or weak spots: No actual Candle, safetensors, tokenizer JSON, or GGUF parsing code exists yet. The next changes will need careful dependency selection and may lengthen builds.
+- Approach adjustment: Add thin feature-gated adapter skeletons before adding real dependencies, then add only the smallest dependency set needed for config/tokenizer smoke parsing.
+- Next priorities: Create adapter module boundaries under `src/`, wire them through the new Cargo features, and keep real model loading behind traits.
 
 Next priorities:
 1. Add real model-loading adapter layer for tokenizer/config/weights paths, preferably behind optional Rust dependencies rather than disturbing the verified core.
