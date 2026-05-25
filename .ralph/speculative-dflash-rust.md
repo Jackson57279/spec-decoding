@@ -154,6 +154,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Do not store a borrowed llama context in the long-lived engine yet. Load/evaluate in a narrower runtime handle or introduce an owned wrapper only after the first single-prefix logits path is proven.
 - Next priorities: Turn the loader descriptor into a real single-prefix llama.cpp evaluation path and then flip the env-gated smoke test to assert finite logits.
 
+## Continuation Reflection 14
+
+- Accomplished: The project has reached the native GGUF evaluator boundary: runtime plans validate real GGUF metadata, `gguf-llama-cpp` links the llama.cpp crate, and the current loader descriptor identifies the exact model path and context shape needed for a single-prefix forward pass.
+- Working well: The plain `gguf` path remains lightweight and explicit, while the native path is isolated inside `GgufRuntimeLogits`. This keeps speculative decoding and adapter backend wrappers from taking on llama.cpp-specific concerns.
+- Blocking or weak spots: The actual decode call is not wired yet, and the smoke harness still expects the not-implemented error. The remote machine also needs the native build environment kept in the verification command.
+- Approach adjustment: Implement the first llama.cpp pass as a narrow load-context-decode operation inside the logits engine, then decide later whether to persist model/context state for KV-cache reuse.
+- Next priorities: Convert prefix tokens into a `LlamaBatch`, decode through llama.cpp, return the last-position logits, and only then update the smoke test to assert finite logits.
+
 Next priorities:
 1. Turn the llama.cpp loader descriptor into a real single-prefix evaluation path inside `GgufRuntimeLogits`.
 2. Flip the env-gated GGUF smoke test to assert finite logits and vocab length once the llama.cpp path can evaluate a prefix.
