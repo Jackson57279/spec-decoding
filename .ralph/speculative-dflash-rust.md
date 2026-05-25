@@ -167,6 +167,14 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Implement the first llama.cpp pass as a narrow load-context-decode operation inside the logits engine, then decide later whether to persist model/context state for KV-cache reuse.
 - Next priorities: Convert prefix tokens into a `LlamaBatch`, decode through llama.cpp, return the last-position logits, and only then update the smoke test to assert finite logits.
 
+## Continuation Reflection 15
+
+- Accomplished: The GGUF path now goes beyond metadata shape checks: it validates alignment, known GGML tensor type IDs, aligned tensor offsets, and simple unquantized tensor data ranges before handing planned GGUF weights to llama.cpp.
+- Working well: The implementation remains dependency-free outside the native feature gate, and the current remote/local verification matrix is stable across default, `gguf-llama-cpp`, and all-feature builds.
+- Blocking or weak spots: Tokenization is still too coarse for backend-specific behavior. The shared trait exposes only plain encode/decode, while real HF and GGUF tokenizers need explicit special-token and decode-skip policy to avoid silent prompt mismatches.
+- Approach adjustment: Add option-carrying tokenizer calls as default trait extensions so existing byte and metadata placeholders stay simple, then let feature-gated tokenizer runtimes override those options where the backend supports them.
+- Next priorities: Expand tokenizer encode/decode policy boundaries first, then resume KV-cache-aware and batched target execution work once prompt-token semantics are less implicit.
+
 Next priorities:
 1. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
 2. Add KV-cache-aware target inference shape and batched verification abstractions.
