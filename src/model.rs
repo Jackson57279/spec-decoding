@@ -57,7 +57,9 @@ impl GenerationConfig {
 
     pub fn validate(&self) -> ModelResult<()> {
         if self.max_new_tokens == 0 {
-            return Err(ModelError::InvalidConfig("max_new_tokens must be greater than zero"));
+            return Err(ModelError::InvalidConfig(
+                "max_new_tokens must be greater than zero",
+            ));
         }
 
         if self.speculative_tokens == 0 {
