@@ -1,6 +1,9 @@
 use crate::model::{ModelError, ModelResult};
 
 const GGUF_HEADER_BYTES: usize = 24;
+const DEFAULT_GGUF_ALIGNMENT: usize = 32;
+#[cfg(test)]
+const MAX_TEST_SIMPLE_TENSOR_BYTES: usize = 1024 * 1024;
 const GGUF_VALUE_UINT8: u32 = 0;
 const GGUF_VALUE_INT8: u32 = 1;
 const GGUF_VALUE_UINT16: u32 = 2;
@@ -23,6 +26,7 @@ pub(crate) struct ParsedGgufFile {
     pub(crate) metadata_kv_count: u64,
     pub(crate) header_bytes: usize,
     pub(crate) architecture: Option<String>,
+    pub(crate) alignment: usize,
     pub(crate) tensors: Vec<ParsedGgufTensorInfo>,
 }
 
@@ -47,31 +51,50 @@ pub(crate) fn parse_gguf_file(buffer: &[u8]) -> ModelResult<ParsedGgufFile> {
 
     let tensor_count = read_u64(&mut cursor, buffer)?;
     let metadata_kv_count = read_u64(&mut cursor, buffer)?;
-    let architecture = read_metadata(&mut cursor, buffer, metadata_kv_count)?;
+    let metadata = read_metadata(&mut cursor, buffer, metadata_kv_count)?;
     let tensors = read_tensor_infos(&mut cursor, buffer, tensor_count)?;
+    validate_tensor_data_bounds(cursor, buffer, metadata.alignment, &tensors)?;
 
     Ok(ParsedGgufFile {
         version,
         tensor_count,
         metadata_kv_count,
         header_bytes: cursor,
-        architecture,
+        architecture: metadata.architecture,
+        alignment: metadata.alignment,
         tensors,
     })
 }
 
-fn read_metadata(cursor: &mut usize, buffer: &[u8], count: u64) -> ModelResult<Option<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedGgufMetadata {
+    architecture: Option<String>,
+    alignment: usize,
+}
+
+fn read_metadata(cursor: &mut usize, buffer: &[u8], count: u64) -> ModelResult<ParsedGgufMetadata> {
     let mut architecture = None;
+    let mut alignment = DEFAULT_GGUF_ALIGNMENT;
     for _ in 0..count {
         let key = read_string(cursor, buffer)?;
         let value_type = read_u32(cursor, buffer)?;
         if key == "general.architecture" && value_type == GGUF_VALUE_STRING {
             architecture = Some(read_string(cursor, buffer)?);
+        } else if key == "general.alignment" && value_type == GGUF_VALUE_UINT32 {
+            alignment = usize::try_from(read_u32(cursor, buffer)?).map_err(|_| invalid_gguf())?;
         } else {
             skip_value(cursor, buffer, value_type, 0)?;
         }
     }
-    Ok(architecture)
+
+    if alignment == 0 {
+        return Err(invalid_gguf());
+    }
+
+    Ok(ParsedGgufMetadata {
+        architecture,
+        alignment,
+    })
 }
 
 fn read_tensor_infos(
@@ -90,6 +113,9 @@ fn read_tensor_infos(
             shape.push(usize::try_from(read_u64(cursor, buffer)?).map_err(|_| invalid_gguf())?);
         }
         let ggml_type = read_u32(cursor, buffer)?;
+        if !is_known_ggml_type(ggml_type) {
+            return Err(invalid_gguf());
+        }
         let offset = read_u64(cursor, buffer)?;
         tensors.push(ParsedGgufTensorInfo {
             name,
@@ -99,6 +125,118 @@ fn read_tensor_infos(
         });
     }
     Ok(tensors)
+}
+
+fn validate_tensor_data_bounds(
+    tensor_info_end: usize,
+    buffer: &[u8],
+    alignment: usize,
+    tensors: &[ParsedGgufTensorInfo],
+) -> ModelResult<()> {
+    if tensors.is_empty() {
+        return Ok(());
+    }
+
+    let data_start = align_up(tensor_info_end, alignment)?;
+    if data_start > buffer.len() {
+        return Err(invalid_gguf());
+    }
+
+    let data_len = buffer.len() - data_start;
+    for tensor in tensors {
+        let offset = usize::try_from(tensor.offset).map_err(|_| invalid_gguf())?;
+        if offset % alignment != 0 || offset > data_len {
+            return Err(invalid_gguf());
+        }
+
+        if let Some(data_bytes) = simple_tensor_data_bytes(tensor)? {
+            let end = offset.checked_add(data_bytes).ok_or_else(invalid_gguf)?;
+            if end > data_len {
+                return Err(invalid_gguf());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn align_up(value: usize, alignment: usize) -> ModelResult<usize> {
+    let remainder = value % alignment;
+    if remainder == 0 {
+        return Ok(value);
+    }
+
+    value
+        .checked_add(alignment - remainder)
+        .ok_or_else(invalid_gguf)
+}
+
+fn simple_tensor_data_bytes(tensor: &ParsedGgufTensorInfo) -> ModelResult<Option<usize>> {
+    let Some(element_bytes) = simple_ggml_element_bytes(tensor.ggml_type) else {
+        return Ok(None);
+    };
+    let element_count = tensor
+        .shape
+        .iter()
+        .try_fold(1_usize, |product, dimension| {
+            if *dimension == 0 {
+                return Err(invalid_gguf());
+            }
+            product.checked_mul(*dimension).ok_or_else(invalid_gguf)
+        })?;
+
+    element_count
+        .checked_mul(element_bytes)
+        .map(Some)
+        .ok_or_else(invalid_gguf)
+}
+
+fn simple_ggml_element_bytes(ggml_type: u32) -> Option<usize> {
+    match ggml_type {
+        0 => Some(4),
+        1 | 25 | 30 => Some(2),
+        24 => Some(1),
+        26 => Some(4),
+        27 | 28 => Some(8),
+        _ => None,
+    }
+}
+
+fn is_known_ggml_type(ggml_type: u32) -> bool {
+    matches!(
+        ggml_type,
+        0 | 1
+            | 2
+            | 3
+            | 6
+            | 7
+            | 8
+            | 9
+            | 10
+            | 11
+            | 12
+            | 13
+            | 14
+            | 15
+            | 16
+            | 17
+            | 18
+            | 19
+            | 20
+            | 21
+            | 22
+            | 23
+            | 24
+            | 25
+            | 26
+            | 27
+            | 28
+            | 29
+            | 30
+            | 34
+            | 35
+            | 39
+    )
 }
 
 fn skip_value(cursor: &mut usize, buffer: &[u8], value_type: u32, depth: usize) -> ModelResult<()> {
@@ -167,6 +305,22 @@ pub(crate) fn test_gguf_bytes(
     tensor_name: &str,
     shape: &[u64],
 ) -> Vec<u8> {
+    let data_bytes = f32_tensor_data_bytes(shape);
+    let ggml_type = if data_bytes <= MAX_TEST_SIMPLE_TENSOR_BYTES {
+        0
+    } else {
+        2
+    };
+    test_gguf_bytes_with_type(architecture, tensor_name, shape, ggml_type)
+}
+
+#[cfg(test)]
+fn test_gguf_bytes_with_type(
+    architecture: Option<&str>,
+    tensor_name: &str,
+    shape: &[u64],
+    ggml_type: u32,
+) -> Vec<u8> {
     let metadata_kv_count = u64::from(architecture.is_some());
     let mut bytes = Vec::new();
     bytes.extend(b"GGUF");
@@ -185,8 +339,12 @@ pub(crate) fn test_gguf_bytes(
     for dimension in shape {
         bytes.extend(dimension.to_le_bytes());
     }
-    bytes.extend(0_u32.to_le_bytes());
+    bytes.extend(ggml_type.to_le_bytes());
     bytes.extend(0_u64.to_le_bytes());
+    pad_to_alignment(&mut bytes, DEFAULT_GGUF_ALIGNMENT);
+    if simple_ggml_element_bytes(ggml_type).is_some() {
+        bytes.extend(vec![0_u8; f32_tensor_data_bytes(shape)]);
+    }
     bytes
 }
 
@@ -204,6 +362,23 @@ pub(crate) fn test_gguf_empty_bytes() -> Vec<u8> {
 fn write_string(bytes: &mut Vec<u8>, value: &str) {
     bytes.extend((value.len() as u64).to_le_bytes());
     bytes.extend(value.as_bytes());
+}
+
+#[cfg(test)]
+fn pad_to_alignment(bytes: &mut Vec<u8>, alignment: usize) {
+    let padding = (alignment - (bytes.len() % alignment)) % alignment;
+    bytes.extend(vec![0_u8; padding]);
+}
+
+#[cfg(test)]
+fn f32_tensor_data_bytes(shape: &[u64]) -> usize {
+    shape
+        .iter()
+        .try_fold(1_usize, |product, dimension| {
+            product.checked_mul(usize::try_from(*dimension).expect("test shape should fit usize"))
+        })
+        .expect("test tensor size should fit usize")
+        * 4
 }
 
 #[cfg(test)]
@@ -226,8 +401,11 @@ mod tests {
         assert_eq!(parsed.tensor_count, 1);
         assert_eq!(parsed.metadata_kv_count, 1);
         assert_eq!(parsed.architecture.as_deref(), Some("llama"));
+        assert_eq!(parsed.alignment, 32);
         assert_eq!(parsed.tensors[0].name, "token_embd.weight");
         assert_eq!(parsed.tensors[0].shape, vec![4, 2]);
+        assert_eq!(parsed.tensors[0].ggml_type, 0);
+        assert_eq!(parsed.tensors[0].offset, 0);
         assert!(parsed.header_bytes > 24);
     }
 
@@ -235,6 +413,28 @@ mod tests {
     fn rejects_truncated_gguf_metadata() {
         let mut bytes = test_gguf_bytes(Some("llama"), "token_embd.weight", &[4, 2]);
         bytes.truncate(bytes.len() - 3);
+
+        assert_eq!(
+            parse_gguf_file(&bytes),
+            Err(ModelError::InvalidConfig("invalid gguf metadata"))
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_ggml_tensor_type() {
+        let bytes =
+            super::test_gguf_bytes_with_type(Some("llama"), "token_embd.weight", &[4, 2], u32::MAX);
+
+        assert_eq!(
+            parse_gguf_file(&bytes),
+            Err(ModelError::InvalidConfig("invalid gguf metadata"))
+        );
+    }
+
+    #[test]
+    fn rejects_tensor_data_outside_file() {
+        let mut bytes = test_gguf_bytes(Some("llama"), "token_embd.weight", &[4, 2]);
+        bytes.truncate(bytes.len() - 1);
 
         assert_eq!(
             parse_gguf_file(&bytes),
