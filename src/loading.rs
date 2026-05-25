@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use crate::model::{ModelError, ModelResult};
+use crate::{
+    drafters::Drafter,
+    model::{ModelError, ModelResult, TargetModel},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelAssetPaths {
@@ -78,6 +81,56 @@ impl ModelLoadRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModelBundle<T, D> {
+    pub target: T,
+    pub draft: Option<D>,
+}
+
+impl<T, D> LoadedModelBundle<T, D> {
+    pub fn target_only(target: T) -> Self {
+        Self {
+            target,
+            draft: None,
+        }
+    }
+
+    pub fn with_draft(target: T, draft: D) -> Self {
+        Self {
+            target,
+            draft: Some(draft),
+        }
+    }
+
+    pub fn has_draft(&self) -> bool {
+        self.draft.is_some()
+    }
+}
+
+pub trait ModelLoader {
+    type Target: TargetModel;
+    type Draft: Drafter;
+
+    fn load_target(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Target>;
+    fn load_draft(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Draft>;
+
+    fn load(
+        &mut self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<LoadedModelBundle<Self::Target, Self::Draft>> {
+        request.validate()?;
+
+        let target = self.load_target(&request.target)?;
+        let draft = request
+            .draft
+            .as_ref()
+            .map(|assets| self.load_draft(assets))
+            .transpose()?;
+
+        Ok(LoadedModelBundle { target, draft })
+    }
+}
+
 fn validate_json_file(path: &Path, message: &'static str) -> ModelResult<()> {
     if !has_extension(path, "json") {
         return Err(ModelError::InvalidConfig(message));
@@ -107,8 +160,9 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::{
-        loading::{ModelAssetPaths, ModelLoadRequest},
-        model::ModelError,
+        drafters::{DraftSequence, Drafter},
+        loading::{LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader},
+        model::{ModelError, ModelResult, TargetModel, TokenId},
     };
 
     fn valid_assets() -> ModelAssetPaths {
@@ -206,5 +260,111 @@ mod tests {
         assert!(target_only.validate().is_ok());
         assert!(with_draft.has_draft());
         assert!(with_draft.validate().is_ok());
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FakeTarget {
+        config_file: PathBuf,
+    }
+
+    impl TargetModel for FakeTarget {
+        fn vocab_size(&self) -> usize {
+            1
+        }
+
+        fn logits_for_prefix(&mut self, _prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+            Ok(vec![0.0])
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FakeDraft {
+        config_file: PathBuf,
+    }
+
+    impl Drafter for FakeDraft {
+        fn draft(&mut self, _prefix: &[TokenId], _max_tokens: usize) -> ModelResult<DraftSequence> {
+            Ok(DraftSequence::new(Vec::new()))
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct FakeLoader {
+        target_loads: usize,
+        draft_loads: usize,
+    }
+
+    impl ModelLoader for FakeLoader {
+        type Target = FakeTarget;
+        type Draft = FakeDraft;
+
+        fn load_target(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Target> {
+            self.target_loads += 1;
+            Ok(FakeTarget {
+                config_file: assets.config_file.clone(),
+            })
+        }
+
+        fn load_draft(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Draft> {
+            self.draft_loads += 1;
+            Ok(FakeDraft {
+                config_file: assets.config_file.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn builds_loaded_model_bundles() {
+        let target = FakeTarget {
+            config_file: PathBuf::from("/models/qwen/config.json"),
+        };
+        let draft = FakeDraft {
+            config_file: PathBuf::from("/models/qwen-draft/config.json"),
+        };
+
+        assert!(!LoadedModelBundle::<_, FakeDraft>::target_only(target.clone()).has_draft());
+        assert!(LoadedModelBundle::with_draft(target, draft).has_draft());
+    }
+
+    #[test]
+    fn loads_valid_target_and_draft_assets() {
+        let target = valid_assets();
+        let draft = ModelAssetPaths::new(
+            "/models/qwen-draft/config.json",
+            "/models/qwen-draft/tokenizer.json",
+            vec![PathBuf::from("/models/qwen-draft/model.safetensors")],
+        )
+        .expect("valid draft");
+        let request = ModelLoadRequest::with_draft(target.clone(), draft.clone());
+        let mut loader = FakeLoader::default();
+
+        let bundle = loader.load(&request).expect("load should succeed");
+
+        assert_eq!(bundle.target.config_file, target.config_file);
+        assert_eq!(
+            bundle.draft.expect("draft should load").config_file,
+            draft.config_file
+        );
+        assert_eq!(loader.target_loads, 1);
+        assert_eq!(loader.draft_loads, 1);
+    }
+
+    #[test]
+    fn validates_requests_before_loading() {
+        let request = ModelLoadRequest::target_only(ModelAssetPaths {
+            config_file: PathBuf::from("/models/qwen/config.toml"),
+            tokenizer_file: PathBuf::from("/models/qwen/tokenizer.json"),
+            weight_files: vec![PathBuf::from("/models/qwen/model.safetensors")],
+        });
+        let mut loader = FakeLoader::default();
+
+        let result = loader.load(&request);
+
+        assert_eq!(
+            result,
+            Err(ModelError::InvalidConfig("config file must be a JSON file"))
+        );
+        assert_eq!(loader.target_loads, 0);
+        assert_eq!(loader.draft_loads, 0);
     }
 }
