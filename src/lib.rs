@@ -1,5 +1,6 @@
 pub mod adapter_loaded;
 pub mod adapter_runtime_plan;
+pub mod adapter_runtime_target;
 pub mod adapter_weight_preflight;
 pub mod adapters;
 pub mod asset_files;
