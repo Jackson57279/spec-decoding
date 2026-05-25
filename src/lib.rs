@@ -13,6 +13,8 @@ pub mod drafters;
 pub(crate) mod gguf_parse;
 #[cfg(feature = "gguf")]
 pub(crate) mod gguf_runtime_logits;
+#[cfg(all(test, feature = "gguf"))]
+mod gguf_runtime_smoke;
 pub mod loading;
 pub mod model;
 pub mod runtime;
