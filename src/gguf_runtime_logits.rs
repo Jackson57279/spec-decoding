@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{num::NonZeroU32, path::PathBuf};
 
 use crate::{
     adapter_runtime_plan::{AdapterRuntimeGgufPlan, AdapterTargetRuntimePlan},
@@ -25,7 +25,7 @@ impl GgufRuntimeLogits {
         let plan = PlanBoundGgufLogitsEngine::from_runtime_plan(plan, vocab_size)?;
 
         Ok(Self {
-            engine: GgufLogitsEngine::from_plan_bound(plan),
+            engine: GgufLogitsEngine::from_plan_bound(plan)?,
             vocab_size,
         })
     }
@@ -60,15 +60,15 @@ enum GgufLogitsEngine {
 }
 
 impl GgufLogitsEngine {
-    fn from_plan_bound(plan: PlanBoundGgufLogitsEngine) -> Self {
+    fn from_plan_bound(plan: PlanBoundGgufLogitsEngine) -> ModelResult<Self> {
         #[cfg(feature = "gguf-llama-cpp")]
         {
-            Self::LlamaCpp(LlamaCppGgufLogitsEngine::new(plan))
+            Ok(Self::LlamaCpp(LlamaCppGgufLogitsEngine::new(plan)?))
         }
 
         #[cfg(not(feature = "gguf-llama-cpp"))]
         {
-            Self::PlanBound(plan)
+            Ok(Self::PlanBound(plan))
         }
     }
 
@@ -94,20 +94,61 @@ impl GgufLogitsEngine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LlamaCppGgufLogitsEngine {
     plan: PlanBoundGgufLogitsEngine,
+    loader: LlamaCppModelContextLoader,
 }
 
 #[cfg(feature = "gguf-llama-cpp")]
 impl LlamaCppGgufLogitsEngine {
-    fn new(plan: PlanBoundGgufLogitsEngine) -> Self {
-        Self { plan }
+    fn new(plan: PlanBoundGgufLogitsEngine) -> ModelResult<Self> {
+        let loader = LlamaCppModelContextLoader::from_plan(&plan)?;
+        Ok(Self { plan, loader })
     }
 
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
-        let _ = prefix;
         let _ = &self.plan;
+        let _ = self.loader.model_params();
+        let _ = self.loader.context_params(prefix.len())?;
         Err(ModelError::InvalidConfig(
             "gguf logits evaluator is not implemented",
         ))
+    }
+}
+
+#[cfg(feature = "gguf-llama-cpp")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LlamaCppModelContextLoader {
+    model_path: PathBuf,
+    vocab_size: usize,
+}
+
+#[cfg(feature = "gguf-llama-cpp")]
+impl LlamaCppModelContextLoader {
+    fn from_plan(plan: &PlanBoundGgufLogitsEngine) -> ModelResult<Self> {
+        let weight = plan.weights.first().ok_or(ModelError::InvalidConfig(
+            "gguf logits require at least one weight file",
+        ))?;
+
+        Ok(Self {
+            model_path: weight.path.clone(),
+            vocab_size: plan.vocab_size,
+        })
+    }
+
+    fn model_params(&self) -> llama_cpp_2::model::params::LlamaModelParams {
+        let _ = &self.model_path;
+        llama_cpp_2::model::params::LlamaModelParams::default()
+    }
+
+    fn context_params(
+        &self,
+        prefix_tokens: usize,
+    ) -> ModelResult<llama_cpp_2::context::params::LlamaContextParams> {
+        let context_tokens = self.vocab_size.max(prefix_tokens).max(1);
+        let context_tokens = u32::try_from(context_tokens)
+            .map_err(|_| ModelError::InvalidConfig("gguf llama.cpp context length is too large"))?;
+
+        Ok(llama_cpp_2::context::params::LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(context_tokens)))
     }
 }
 
@@ -290,6 +331,8 @@ mod tests {
             #[cfg(feature = "gguf-llama-cpp")]
             super::GgufLogitsEngine::LlamaCpp(engine) => {
                 assert_bound_plan(&engine.plan);
+                assert_eq!(engine.loader.model_path, PathBuf::from("/tmp/model.gguf"));
+                assert_eq!(engine.loader.vocab_size, 2);
             }
             #[cfg(not(feature = "gguf-llama-cpp"))]
             super::GgufLogitsEngine::PlanBound(engine) => {
