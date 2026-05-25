@@ -19,3 +19,11 @@ Deep research speculative decoding and DFlash. Goal: design and implement a bett
 - Blocking or weak spots: The remote host has `cargo` but not `sfw`, so remote package/tool execution is less locked down than local execution. The runtime still uses mock/scripted model tests; no real HF/Candle model loading exists yet.
 - Approach adjustment: Continue the narrow Rust-first path, but add the speculative verification loop before pulling in heavy Candle dependencies. That keeps the lossless acceptance logic testable independent of GPU/model integration.
 - Next priorities: Implement speculative verification metrics using the existing `TargetModel` and `Drafter` traits, then add a DFlash-style block drafter interface and only after that wire in actual model loading.
+
+## Reflection 2
+
+- Accomplished: The runtime now has a complete dependency-free control plane: baseline greedy decoding, prompt-lookup drafting, greedy speculative verification, DFlash-style block drafting request types, target feature extraction, and an adapter that lets block drafters participate in the verifier through the generic `Drafter` trait.
+- Working well: The abstractions are still small and testable, with 21 local/remote tests passing after iteration 10. The separation between `TargetModel`, `TargetFeatureExtractor`, `Drafter`, and `BlockDrafter` should make the later Candle/HF integration less invasive.
+- Blocking or weak spots: The implementation is still algorithmic scaffolding only. It does not yet load tokenizer/model files, preserve KV cache state, run batched target verification, or implement probabilistic/speculative sampling acceptance.
+- Approach adjustment: Keep one more pure-Rust scaffolding layer for configuration/metrics before adding dependencies. Then add HF/Candle integration behind traits instead of rewriting the verified control flow.
+- Next priorities: Add runtime configuration and richer metric reporting for acceptance rate and target-forward efficiency, then introduce a model-loading adapter layer for tokenizer/config/weights paths.
