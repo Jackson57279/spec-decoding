@@ -1,9 +1,47 @@
 use crate::{
     adapters::{AdapterKind, AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
-    config::{ModelAssetSummary, TokenizerConfigSummary},
+    config::{ModelAssetSummary, ModelConfigSummary, TokenizerConfigSummary},
     loading::ModelLoadRequest,
-    model::{ModelError, ModelResult, TokenId, TokenSequence, Tokenizer},
+    model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterTargetPlaceholder {
+    summary: ModelConfigSummary,
+    tokenizer_vocab_size: Option<usize>,
+}
+
+impl AdapterTargetPlaceholder {
+    pub fn from_summaries(summary: ModelConfigSummary, tokenizer: &TokenizerConfigSummary) -> Self {
+        Self {
+            summary,
+            tokenizer_vocab_size: tokenizer.vocab_size,
+        }
+    }
+
+    pub fn summary(&self) -> &ModelConfigSummary {
+        &self.summary
+    }
+
+    pub fn model_type(&self) -> Option<&str> {
+        self.summary.model_type.as_deref()
+    }
+}
+
+impl TargetModel for AdapterTargetPlaceholder {
+    fn vocab_size(&self) -> usize {
+        self.summary
+            .vocab_size
+            .or(self.tokenizer_vocab_size)
+            .unwrap_or(0)
+    }
+
+    fn logits_for_prefix(&mut self, _prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
+        Err(ModelError::InvalidConfig(
+            "metadata target cannot produce logits",
+        ))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterTokenizerPlaceholder {
@@ -45,6 +83,7 @@ impl Tokenizer for AdapterTokenizerPlaceholder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterLoadedModelMetadata {
     pub kind: AdapterKind,
+    pub model: AdapterTargetPlaceholder,
     pub tokenizer: AdapterTokenizerPlaceholder,
     pub summary: ModelAssetSummary,
 }
@@ -53,9 +92,14 @@ impl AdapterLoadedModelMetadata {
     pub fn from_preflight(preflight: AdapterModelPreflight) -> Self {
         let tokenizer =
             AdapterTokenizerPlaceholder::from_summary(preflight.summary.tokenizer.clone());
+        let model = AdapterTargetPlaceholder::from_summaries(
+            preflight.summary.model.clone(),
+            &preflight.summary.tokenizer,
+        );
 
         Self {
             kind: preflight.plan.kind,
+            model,
             tokenizer,
             summary: preflight.summary,
         }
@@ -113,7 +157,7 @@ mod tests {
     use crate::{
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
-        model::{ModelError, Tokenizer},
+        model::{ModelError, TargetModel, Tokenizer},
     };
 
     struct TempAssets {
@@ -186,6 +230,17 @@ mod tests {
             loaded.target.summary.model.model_type.as_deref(),
             Some("llama")
         );
+        assert_eq!(loaded.target.model.model_type(), Some("llama"));
+        assert_eq!(TargetModel::vocab_size(&loaded.target.model), 32000);
+
+        let mut target_model = loaded.target.model.clone();
+        assert_eq!(
+            target_model.logits_for_prefix(&[0, 1]),
+            Err(ModelError::InvalidConfig(
+                "metadata target cannot produce logits"
+            ))
+        );
+
         assert_eq!(loaded.target.tokenizer.model_type(), Some("BPE"));
         assert_eq!(loaded.target.tokenizer.vocab_size(), 2);
         assert_eq!(
