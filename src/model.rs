@@ -155,6 +155,76 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KvCacheState {
+    cached_tokens: usize,
+}
+
+impl KvCacheState {
+    pub fn new(cached_tokens: usize) -> Self {
+        Self { cached_tokens }
+    }
+
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn cached_tokens(&self) -> usize {
+        self.cached_tokens
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedTargetRequest {
+    prefix: TokenSequence,
+    cache: KvCacheState,
+}
+
+impl CachedTargetRequest {
+    pub fn new(prefix: TokenSequence, cache: KvCacheState) -> ModelResult<Self> {
+        if cache.cached_tokens() > prefix.len() {
+            return Err(ModelError::InvalidConfig(
+                "cache length must not exceed prefix length",
+            ));
+        }
+
+        Ok(Self { prefix, cache })
+    }
+
+    pub fn prefix(&self) -> &[TokenId] {
+        self.prefix.as_slice()
+    }
+
+    pub fn cache(&self) -> KvCacheState {
+        self.cache
+    }
+}
+
+pub trait CachedTargetModel {
+    fn vocab_size(&self) -> usize;
+    fn logits_with_cache(
+        &mut self,
+        request: &CachedTargetRequest,
+    ) -> ModelResult<(Vec<f32>, KvCacheState)>;
+}
+
+impl<T> CachedTargetModel for T
+where
+    T: TargetModel,
+{
+    fn vocab_size(&self) -> usize {
+        TargetModel::vocab_size(self)
+    }
+
+    fn logits_with_cache(
+        &mut self,
+        request: &CachedTargetRequest,
+    ) -> ModelResult<(Vec<f32>, KvCacheState)> {
+        let logits = self.logits_for_prefix(request.prefix())?;
+        Ok((logits, KvCacheState::new(request.prefix().len())))
+    }
+}
+
 pub trait Tokenizer {
     fn vocab_size(&self) -> usize;
     fn encode(&self, text: &str) -> ModelResult<TokenSequence>;
@@ -213,8 +283,9 @@ pub fn greedy_token(logits: &[f32]) -> ModelResult<TokenId> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BatchedTargetModel, ByteTokenizer, GenerationConfig, ModelError, ModelResult, TargetBatch,
-        TargetModel, TokenId, TokenSequence, Tokenizer, greedy_token,
+        BatchedTargetModel, ByteTokenizer, CachedTargetModel, CachedTargetRequest,
+        GenerationConfig, KvCacheState, ModelError, ModelResult, TargetBatch, TargetModel, TokenId,
+        TokenSequence, Tokenizer, greedy_token,
     };
 
     #[test]
@@ -339,5 +410,38 @@ mod tests {
         assert_eq!(BatchedTargetModel::vocab_size(&target), 1);
         assert_eq!(target.calls, vec![vec![10], vec![10, 11]]);
         assert_eq!(logits, vec![vec![1.0], vec![2.0]]);
+    }
+
+    #[test]
+    fn validates_cached_target_requests() {
+        let request =
+            CachedTargetRequest::new(TokenSequence::new(vec![1, 2, 3]), KvCacheState::new(2))
+                .expect("cache should be valid");
+
+        assert_eq!(request.prefix(), &[1, 2, 3]);
+        assert_eq!(request.cache().cached_tokens(), 2);
+        assert_eq!(
+            CachedTargetRequest::new(TokenSequence::new(vec![1]), KvCacheState::new(2)),
+            Err(ModelError::InvalidConfig(
+                "cache length must not exceed prefix length"
+            ))
+        );
+    }
+
+    #[test]
+    fn provides_cached_target_fallback() {
+        let request =
+            CachedTargetRequest::new(TokenSequence::new(vec![20, 21]), KvCacheState::empty())
+                .expect("request should be valid");
+        let mut target = RecordingTarget::default();
+
+        let (logits, cache) = target
+            .logits_with_cache(&request)
+            .expect("fallback should run");
+
+        assert_eq!(CachedTargetModel::vocab_size(&target), 1);
+        assert_eq!(target.calls, vec![vec![20, 21]]);
+        assert_eq!(logits, vec![2.0]);
+        assert_eq!(cache.cached_tokens(), 2);
     }
 }
