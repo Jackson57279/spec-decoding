@@ -3,3 +3,4 @@ Deep research speculative decoding and DFlash. Goal: design and implement a bett
 ## Progress
 
 - Iteration 1: Confirmed the workspace was not a git repository, initialized `/home/dih/speclative-diffusion`, and committed `.gitignore` so generated `.crew` state, Ralph state JSON, and Rust `target/` output stay out of commits.
+- Iteration 2: Added the initial Rust crate skeleton with `Cargo.toml`, `src/lib.rs`, and Cargo's generated lockfile as separate commits. Verified the skeleton with `sfw cargo fmt --check` and `sfw cargo test`.
