@@ -316,6 +316,7 @@ mod tests {
 
     use crate::{
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_parse::test_gguf_bytes,
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::{ModelError, TargetModel, Tokenizer},
     };
@@ -370,12 +371,11 @@ mod tests {
         }
 
         fn write_gguf(&self) {
-            let mut bytes = Vec::new();
-            bytes.extend(b"GGUF");
-            bytes.extend(3_u32.to_le_bytes());
-            bytes.extend(11_u64.to_le_bytes());
-            bytes.extend(5_u64.to_le_bytes());
-            write(&self.weights, bytes).expect("gguf should be written");
+            write(
+                &self.weights,
+                test_gguf_bytes(Some("llama"), "token_embd.weight", &[4096, 32000]),
+            )
+            .expect("gguf should be written");
         }
 
         #[cfg(feature = "safetensors")]
@@ -534,7 +534,7 @@ mod tests {
                 .as_ref()
                 .expect("gguf metadata")
                 .tensor_count,
-            11
+            1
         );
     }
 
