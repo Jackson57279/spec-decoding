@@ -1,20 +1,62 @@
 use crate::{
     adapters::{AdapterKind, AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
-    config::ModelAssetSummary,
+    config::{ModelAssetSummary, TokenizerConfigSummary},
     loading::ModelLoadRequest,
-    model::ModelResult,
+    model::{ModelError, ModelResult, TokenId, TokenSequence, Tokenizer},
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterTokenizerPlaceholder {
+    summary: TokenizerConfigSummary,
+}
+
+impl AdapterTokenizerPlaceholder {
+    pub fn from_summary(summary: TokenizerConfigSummary) -> Self {
+        Self { summary }
+    }
+
+    pub fn summary(&self) -> &TokenizerConfigSummary {
+        &self.summary
+    }
+
+    pub fn model_type(&self) -> Option<&str> {
+        self.summary.model_type.as_deref()
+    }
+}
+
+impl Tokenizer for AdapterTokenizerPlaceholder {
+    fn vocab_size(&self) -> usize {
+        self.summary.vocab_size.unwrap_or(0)
+    }
+
+    fn encode(&self, _text: &str) -> ModelResult<TokenSequence> {
+        Err(ModelError::InvalidConfig(
+            "metadata tokenizer cannot encode text",
+        ))
+    }
+
+    fn decode(&self, _tokens: &[TokenId]) -> ModelResult<String> {
+        Err(ModelError::InvalidConfig(
+            "metadata tokenizer cannot decode tokens",
+        ))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterLoadedModelMetadata {
     pub kind: AdapterKind,
+    pub tokenizer: AdapterTokenizerPlaceholder,
     pub summary: ModelAssetSummary,
 }
 
 impl AdapterLoadedModelMetadata {
     pub fn from_preflight(preflight: AdapterModelPreflight) -> Self {
+        let tokenizer =
+            AdapterTokenizerPlaceholder::from_summary(preflight.summary.tokenizer.clone());
+
         Self {
             kind: preflight.plan.kind,
+            tokenizer,
             summary: preflight.summary,
         }
     }
@@ -71,6 +113,7 @@ mod tests {
     use crate::{
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
+        model::{ModelError, Tokenizer},
     };
 
     struct TempAssets {
@@ -142,6 +185,20 @@ mod tests {
         assert_eq!(
             loaded.target.summary.model.model_type.as_deref(),
             Some("llama")
+        );
+        assert_eq!(loaded.target.tokenizer.model_type(), Some("BPE"));
+        assert_eq!(loaded.target.tokenizer.vocab_size(), 2);
+        assert_eq!(
+            loaded.target.tokenizer.encode("hello"),
+            Err(ModelError::InvalidConfig(
+                "metadata tokenizer cannot encode text"
+            ))
+        );
+        assert_eq!(
+            loaded.target.tokenizer.decode(&[0]),
+            Err(ModelError::InvalidConfig(
+                "metadata tokenizer cannot decode tokens"
+            ))
         );
         assert_eq!(
             loaded.target.summary.weight_format,
