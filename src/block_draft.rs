@@ -94,10 +94,16 @@ pub trait BlockDrafter {
     fn draft_block(&mut self, request: BlockDraftRequest<'_>) -> ModelResult<DraftSequence>;
 }
 
+pub trait TargetFeatureExtractor {
+    fn extract_target_features(&mut self, prefix: &[TokenId]) -> ModelResult<TargetFeatureWindow>;
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        block_draft::{BlockDraftRequest, BlockDrafter, TargetFeatureWindow},
+        block_draft::{
+            BlockDraftRequest, BlockDrafter, TargetFeatureExtractor, TargetFeatureWindow,
+        },
         drafters::DraftSequence,
         model::{ModelError, TokenId},
     };
@@ -132,6 +138,23 @@ mod tests {
                     .take(request.max_tokens)
                     .collect(),
             ))
+        }
+    }
+
+    struct PrefixFeatureExtractor;
+
+    impl TargetFeatureExtractor for PrefixFeatureExtractor {
+        fn extract_target_features(&mut self, prefix: &[TokenId]) -> Result<TargetFeatureWindow, ModelError> {
+            TargetFeatureWindow::new(
+                prefix.len().max(1),
+                2,
+                prefix
+                    .iter()
+                    .flat_map(|token| [*token as f32, (*token as f32) + 0.5])
+                    .chain((prefix.is_empty()).then_some(0.0))
+                    .chain((prefix.is_empty()).then_some(0.5))
+                    .collect(),
+            )
         }
     }
 
@@ -193,6 +216,20 @@ mod tests {
         assert_eq!(draft.as_slice(), &[9, 8]);
         assert_eq!(drafter.seen_last, Some(9));
         assert_eq!(drafter.seen_width, 2);
+    }
+
+    #[test]
+    fn feature_extractor_builds_block_request_conditioning() {
+        let mut extractor = PrefixFeatureExtractor;
+        let features = extractor
+            .extract_target_features(&[3, 4])
+            .expect("features");
+        let request = BlockDraftRequest::new(&[3, 4], &features, 2).expect("request");
+
+        assert_eq!(request.target_features.rows(), 2);
+        assert_eq!(request.target_features.width(), 2);
+        assert_eq!(request.target_features.row(0), Some(&[3.0, 3.5][..]));
+        assert_eq!(request.target_features.row(1), Some(&[4.0, 4.5][..]));
     }
 
     #[test]
