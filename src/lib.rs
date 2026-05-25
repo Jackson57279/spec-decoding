@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod asset_files;
 pub mod block_draft;
 pub mod decode;
 pub mod drafters;
