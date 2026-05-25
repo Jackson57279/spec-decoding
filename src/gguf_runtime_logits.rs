@@ -43,9 +43,12 @@ enum GgufLogitsEngine {
 impl GgufLogitsEngine {
     fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
         match self {
-            Self::Unavailable => Err(ModelError::InvalidConfig(
-                "gguf logits engine is not configured",
-            )),
+            Self::Unavailable => {
+                let _ = prefix;
+                Err(ModelError::InvalidConfig(
+                    "gguf logits engine is not configured",
+                ))
+            }
             #[cfg(test)]
             Self::Static(engine) => engine.logits_for_prefix(prefix),
         }
