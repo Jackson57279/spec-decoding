@@ -4,7 +4,7 @@ use crate::{
     adapters::{AdapterLoadPreflight, AdapterLoaderShell, AdapterModelPreflight},
     loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
     model::{ModelError, ModelResult},
-    weight_metadata::SafeTensorsFileMetadata,
+    weight_metadata::{GgufFileMetadata, SafeTensorsFileMetadata, read_gguf_file_metadata},
 };
 
 #[cfg(feature = "safetensors")]
@@ -15,6 +15,7 @@ pub struct AdapterWeightFilePreflight {
     pub path: PathBuf,
     pub format: WeightFormat,
     pub safetensors: Option<SafeTensorsFileMetadata>,
+    pub gguf: Option<GgufFileMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +106,7 @@ fn read_weight_file_preflight(
 ) -> ModelResult<AdapterWeightFilePreflight> {
     Ok(AdapterWeightFilePreflight {
         safetensors: read_optional_safetensors_metadata(&path, format)?,
+        gguf: read_optional_gguf_metadata(&path, format)?,
         path,
         format,
     })
@@ -128,6 +130,16 @@ fn read_safetensors_metadata(path: &PathBuf) -> ModelResult<Option<SafeTensorsFi
 #[cfg(not(feature = "safetensors"))]
 fn read_safetensors_metadata(_path: &PathBuf) -> ModelResult<Option<SafeTensorsFileMetadata>> {
     Ok(None)
+}
+
+fn read_optional_gguf_metadata(
+    path: &PathBuf,
+    format: WeightFormat,
+) -> ModelResult<Option<GgufFileMetadata>> {
+    match format {
+        WeightFormat::SafeTensors => Ok(None),
+        WeightFormat::Gguf => read_gguf_file_metadata(path).map(Some),
+    }
 }
 
 #[cfg(test)]
@@ -193,6 +205,15 @@ mod tests {
             .expect("asset paths should be valid")
         }
 
+        fn write_gguf(&self) {
+            let mut bytes = Vec::new();
+            bytes.extend(b"GGUF");
+            bytes.extend(3_u32.to_le_bytes());
+            bytes.extend(7_u64.to_le_bytes());
+            bytes.extend(2_u64.to_le_bytes());
+            write(&self.weights, bytes).expect("gguf should be written");
+        }
+
         #[cfg(feature = "safetensors")]
         fn write_safetensors(&self) {
             let header = br#"{"weight":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#;
@@ -247,6 +268,7 @@ mod tests {
     fn builds_weight_preflight_for_target_and_draft_requests() {
         let target = TempAssets::new("target-draft", "model.safetensors");
         let draft = TempAssets::new("draft", "model.gguf");
+        draft.write_gguf();
         #[cfg(feature = "safetensors")]
         target.write_safetensors();
         let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
@@ -262,6 +284,14 @@ mod tests {
         );
         assert_eq!(draft_preflight.weights[0].format, WeightFormat::Gguf);
         assert_eq!(draft_preflight.weights[0].safetensors, None);
+        assert_eq!(
+            draft_preflight.weights[0]
+                .gguf
+                .as_ref()
+                .expect("gguf metadata")
+                .tensor_count,
+            7
+        );
     }
 
     #[test]
