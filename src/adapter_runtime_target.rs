@@ -172,7 +172,7 @@ mod tests {
 
     use crate::{
         adapter_runtime_plan::AdapterTargetRuntimePlan,
-        adapter_runtime_target::{AdapterRuntimeTargetBundle, AdapterRuntimeTargetPlaceholder},
+        adapter_runtime_target::AdapterRuntimeTargetPlaceholder,
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::{ModelError, TargetBatch, TargetModel, TokenSequence},
@@ -318,8 +318,7 @@ mod tests {
         let request = ModelLoadRequest::target_only(assets.paths());
 
         assert_eq!(
-            AdapterLoaderShell::new(AdapterKind::Gguf)
-                .load_target_runtime_target_bundle(&request),
+            AdapterLoaderShell::new(AdapterKind::Gguf).load_target_runtime_target_bundle(&request),
             Err(ModelError::InvalidConfig("hidden size is required"))
         );
     }
