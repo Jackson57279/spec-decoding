@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     drafters::Drafter,
-    model::{ModelError, ModelResult, TargetModel},
+    model::{ModelError, ModelResult, TargetModel, Tokenizer},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,23 +82,35 @@ impl ModelLoadRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedModelBundle<T, D> {
-    pub target: T,
-    pub draft: Option<D>,
+pub struct LoadedModel<M, Tok> {
+    pub model: M,
+    pub tokenizer: Tok,
 }
 
-impl<T, D> LoadedModelBundle<T, D> {
-    pub fn target_only(target: T) -> Self {
+impl<M, Tok> LoadedModel<M, Tok> {
+    pub fn new(model: M, tokenizer: Tok) -> Self {
+        Self { model, tokenizer }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModelBundle<T, TT, D, DT> {
+    pub target: LoadedModel<T, TT>,
+    pub draft: Option<LoadedModel<D, DT>>,
+}
+
+impl<T, TT, D, DT> LoadedModelBundle<T, TT, D, DT> {
+    pub fn target_only(target: T, target_tokenizer: TT) -> Self {
         Self {
-            target,
+            target: LoadedModel::new(target, target_tokenizer),
             draft: None,
         }
     }
 
-    pub fn with_draft(target: T, draft: D) -> Self {
+    pub fn with_draft(target: T, target_tokenizer: TT, draft: D, draft_tokenizer: DT) -> Self {
         Self {
-            target,
-            draft: Some(draft),
+            target: LoadedModel::new(target, target_tokenizer),
+            draft: Some(LoadedModel::new(draft, draft_tokenizer)),
         }
     }
 
@@ -109,25 +121,44 @@ impl<T, D> LoadedModelBundle<T, D> {
 
 pub trait ModelLoader {
     type Target: TargetModel;
+    type TargetTokenizer: Tokenizer;
     type Draft: Drafter;
+    type DraftTokenizer: Tokenizer;
 
     fn load_target(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Target>;
+    fn load_target_tokenizer(
+        &mut self,
+        assets: &ModelAssetPaths,
+    ) -> ModelResult<Self::TargetTokenizer>;
     fn load_draft(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Draft>;
+    fn load_draft_tokenizer(
+        &mut self,
+        assets: &ModelAssetPaths,
+    ) -> ModelResult<Self::DraftTokenizer>;
 
     fn load(
         &mut self,
         request: &ModelLoadRequest,
-    ) -> ModelResult<LoadedModelBundle<Self::Target, Self::Draft>> {
+    ) -> ModelResult<
+        LoadedModelBundle<Self::Target, Self::TargetTokenizer, Self::Draft, Self::DraftTokenizer>,
+    > {
         request.validate()?;
 
         let target = self.load_target(&request.target)?;
-        let draft = request
-            .draft
-            .as_ref()
-            .map(|assets| self.load_draft(assets))
-            .transpose()?;
+        let target_tokenizer = self.load_target_tokenizer(&request.target)?;
+        let draft = if let Some(assets) = &request.draft {
+            Some(LoadedModel::new(
+                self.load_draft(assets)?,
+                self.load_draft_tokenizer(assets)?,
+            ))
+        } else {
+            None
+        };
 
-        Ok(LoadedModelBundle { target, draft })
+        Ok(LoadedModelBundle {
+            target: LoadedModel::new(target, target_tokenizer),
+            draft,
+        })
     }
 }
 
@@ -161,8 +192,8 @@ mod tests {
 
     use crate::{
         drafters::{DraftSequence, Drafter},
-        loading::{LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader},
-        model::{ModelError, ModelResult, TargetModel, TokenId},
+        loading::{LoadedModel, LoadedModelBundle, ModelAssetPaths, ModelLoadRequest, ModelLoader},
+        model::{ModelError, ModelResult, TargetModel, TokenId, TokenSequence, Tokenizer},
     };
 
     fn valid_assets() -> ModelAssetPaths {
@@ -288,20 +319,53 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FakeTokenizer {
+        tokenizer_file: PathBuf,
+    }
+
+    impl Tokenizer for FakeTokenizer {
+        fn vocab_size(&self) -> usize {
+            1
+        }
+
+        fn encode(&self, _text: &str) -> ModelResult<TokenSequence> {
+            Ok(TokenSequence::new(Vec::new()))
+        }
+
+        fn decode(&self, _tokens: &[TokenId]) -> ModelResult<String> {
+            Ok(String::new())
+        }
+    }
+
     #[derive(Debug, Default)]
     struct FakeLoader {
         target_loads: usize,
+        target_tokenizer_loads: usize,
         draft_loads: usize,
+        draft_tokenizer_loads: usize,
     }
 
     impl ModelLoader for FakeLoader {
         type Target = FakeTarget;
+        type TargetTokenizer = FakeTokenizer;
         type Draft = FakeDraft;
+        type DraftTokenizer = FakeTokenizer;
 
         fn load_target(&mut self, assets: &ModelAssetPaths) -> ModelResult<Self::Target> {
             self.target_loads += 1;
             Ok(FakeTarget {
                 config_file: assets.config_file.clone(),
+            })
+        }
+
+        fn load_target_tokenizer(
+            &mut self,
+            assets: &ModelAssetPaths,
+        ) -> ModelResult<Self::TargetTokenizer> {
+            self.target_tokenizer_loads += 1;
+            Ok(FakeTokenizer {
+                tokenizer_file: assets.tokenizer_file.clone(),
             })
         }
 
@@ -311,19 +375,50 @@ mod tests {
                 config_file: assets.config_file.clone(),
             })
         }
+
+        fn load_draft_tokenizer(
+            &mut self,
+            assets: &ModelAssetPaths,
+        ) -> ModelResult<Self::DraftTokenizer> {
+            self.draft_tokenizer_loads += 1;
+            Ok(FakeTokenizer {
+                tokenizer_file: assets.tokenizer_file.clone(),
+            })
+        }
     }
 
     #[test]
-    fn builds_loaded_model_bundles() {
+    fn builds_loaded_models_and_bundles() {
         let target = FakeTarget {
             config_file: PathBuf::from("/models/qwen/config.json"),
+        };
+        let target_tokenizer = FakeTokenizer {
+            tokenizer_file: PathBuf::from("/models/qwen/tokenizer.json"),
         };
         let draft = FakeDraft {
             config_file: PathBuf::from("/models/qwen-draft/config.json"),
         };
+        let draft_tokenizer = FakeTokenizer {
+            tokenizer_file: PathBuf::from("/models/qwen-draft/tokenizer.json"),
+        };
 
-        assert!(!LoadedModelBundle::<_, FakeDraft>::target_only(target.clone()).has_draft());
-        assert!(LoadedModelBundle::with_draft(target, draft).has_draft());
+        assert_eq!(
+            LoadedModel::new(target.clone(), target_tokenizer.clone()).tokenizer,
+            target_tokenizer
+        );
+        assert!(
+            !LoadedModelBundle::<_, _, FakeDraft, FakeTokenizer>::target_only(
+                target.clone(),
+                FakeTokenizer {
+                    tokenizer_file: PathBuf::from("/models/qwen/tokenizer.json"),
+                },
+            )
+            .has_draft()
+        );
+        assert!(
+            LoadedModelBundle::with_draft(target, target_tokenizer, draft, draft_tokenizer)
+                .has_draft()
+        );
     }
 
     #[test]
@@ -340,13 +435,18 @@ mod tests {
 
         let bundle = loader.load(&request).expect("load should succeed");
 
-        assert_eq!(bundle.target.config_file, target.config_file);
+        assert_eq!(bundle.target.model.config_file, target.config_file);
         assert_eq!(
-            bundle.draft.expect("draft should load").config_file,
-            draft.config_file
+            bundle.target.tokenizer.tokenizer_file,
+            target.tokenizer_file
         );
+        let loaded_draft = bundle.draft.expect("draft should load");
+        assert_eq!(loaded_draft.model.config_file, draft.config_file);
+        assert_eq!(loaded_draft.tokenizer.tokenizer_file, draft.tokenizer_file);
         assert_eq!(loader.target_loads, 1);
+        assert_eq!(loader.target_tokenizer_loads, 1);
         assert_eq!(loader.draft_loads, 1);
+        assert_eq!(loader.draft_tokenizer_loads, 1);
     }
 
     #[test]
@@ -365,6 +465,8 @@ mod tests {
             Err(ModelError::InvalidConfig("config file must be a JSON file"))
         );
         assert_eq!(loader.target_loads, 0);
+        assert_eq!(loader.target_tokenizer_loads, 0);
         assert_eq!(loader.draft_loads, 0);
+        assert_eq!(loader.draft_tokenizer_loads, 0);
     }
 }
