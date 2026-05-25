@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod block_draft;
 pub mod decode;
 pub mod drafters;
