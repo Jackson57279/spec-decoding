@@ -32,9 +32,7 @@ impl TargetFeatureWindow {
         }
 
         if values.iter().any(|value| !value.is_finite()) {
-            return Err(ModelError::InvalidConfig(
-                "feature values must be finite",
-            ));
+            return Err(ModelError::InvalidConfig("feature values must be finite"));
         }
 
         Ok(Self {
@@ -119,11 +117,20 @@ mod tests {
     }
 
     impl BlockDrafter for RecordingBlockDrafter {
-        fn draft_block(&mut self, request: BlockDraftRequest<'_>) -> Result<DraftSequence, ModelError> {
+        fn draft_block(
+            &mut self,
+            request: BlockDraftRequest<'_>,
+        ) -> Result<DraftSequence, ModelError> {
             self.seen_last = request.last_verified;
             self.seen_width = request.target_features.width();
             Ok(DraftSequence::new(
-                request.prefix.iter().copied().rev().take(request.max_tokens).collect(),
+                request
+                    .prefix
+                    .iter()
+                    .copied()
+                    .rev()
+                    .take(request.max_tokens)
+                    .collect(),
             ))
         }
     }
@@ -150,9 +157,7 @@ mod tests {
         );
         assert_eq!(
             TargetFeatureWindow::new(1, 1, vec![f32::NAN]),
-            Err(ModelError::InvalidConfig(
-                "feature values must be finite"
-            ))
+            Err(ModelError::InvalidConfig("feature values must be finite"))
         );
     }
 
