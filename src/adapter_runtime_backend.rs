@@ -122,14 +122,16 @@ pub mod gguf {
         adapter_runtime_target::AdapterRuntimeTargetPlaceholder,
         adapter_runtime_weight_check::validate_gguf_runtime_weights,
         adapters::{AdapterKind, AdapterLoaderShell},
+        gguf_runtime_logits::GgufRuntimeLogits,
         loading::ModelLoadRequest,
         model::{ModelError, ModelResult, TargetModel, TokenId},
     };
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     pub struct GgufRuntimeTarget {
         inner: AdapterRuntimeTargetPlaceholder,
         weight_paths: Vec<PathBuf>,
+        logits: GgufRuntimeLogits,
     }
 
     impl GgufRuntimeTarget {
@@ -144,6 +146,7 @@ pub mod gguf {
             validate_gguf_runtime_weights(plan)?;
 
             Ok(Self {
+                logits: GgufRuntimeLogits::unavailable(TargetModel::vocab_size(&inner)),
                 inner,
                 weight_paths: weight_paths(plan),
             })
@@ -160,6 +163,13 @@ pub mod gguf {
         pub fn weight_paths(&self) -> &[PathBuf] {
             &self.weight_paths
         }
+
+        #[cfg(test)]
+        pub(crate) fn with_test_logits(mut self, logits: Vec<f32>) -> Self {
+            self.logits =
+                GgufRuntimeLogits::test_static(TargetModel::vocab_size(&self.inner), logits);
+            self
+        }
     }
 
     impl TargetModel for GgufRuntimeTarget {
@@ -169,13 +179,11 @@ pub mod gguf {
 
         fn logits_for_prefix(&mut self, prefix: &[TokenId]) -> ModelResult<Vec<f32>> {
             self.inner.validate_prefix(prefix)?;
-            Err(ModelError::InvalidConfig(
-                "gguf backend cannot produce logits yet",
-            ))
+            self.logits.logits_for_prefix(prefix)
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     pub struct GgufRuntimeTargetBundle {
         pub target: GgufRuntimeTarget,
         pub draft: Option<GgufRuntimeTarget>,
@@ -358,14 +366,20 @@ mod tests {
         let assets = TempAssets::gguf("gguf-target", valid_config());
         let plan = assets.runtime_plan(AdapterKind::Gguf);
 
-        let target =
+        let mut target =
             crate::adapter_runtime_backend::gguf::GgufRuntimeTarget::from_runtime_plan(&plan)
-                .expect("gguf backend should build");
+                .expect("gguf backend should build")
+                .with_test_logits(vec![0.25, 0.75]);
 
         assert_eq!(target.model_type(), "llama");
         assert_eq!(TargetModel::vocab_size(&target), 2);
         assert_eq!(target.weight_file_count(), 1);
         assert!(target.weight_paths().contains(&assets.weights));
+        assert_eq!(target.logits_for_prefix(&[0, 1]), Ok(vec![0.25, 0.75]));
+        assert_eq!(
+            target.logits_for_prefix(&[2]),
+            Err(ModelError::TokenOutOfRange { index: 0 })
+        );
     }
 
     #[cfg(feature = "gguf")]
