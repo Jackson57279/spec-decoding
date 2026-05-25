@@ -46,6 +46,7 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Continuation iteration 30: Added a dependency-free GGUF parser in `src/gguf_parse.rs` for architecture key-values and tensor-info tables, exposed parsed GGUF tensor metadata through `src/weight_metadata.rs`, carried the parsed counts into runtime plans, and made GGUF backend validation reject missing architecture metadata, config architecture mismatches, missing `token_embd.weight`, and embedding tensor shape mismatches before backend construction. Migrated GGUF fixtures away from fixed-header-only blobs. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 31: Added `src/gguf_runtime_logits.rs`, a feature-gated GGUF logits-engine boundary that validates logits length against runtime vocab size and gives the GGUF backend a replaceable path for real evaluator output instead of hardcoding logits failure in `src/adapter_runtime_backend.rs`. The backend still defaults to an explicit unconfigured-engine error, while tests can inject static logits to verify `TargetModel` routing and token range checks. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 - Continuation iteration 32: Made `GgufRuntimeLogits` plan-bound by capturing model type, vocab size, hidden size, layer count, GGUF metadata summaries, and weight paths from `AdapterTargetRuntimePlan`. The GGUF backend now constructs its logits engine from the same validated runtime plan it uses for target construction, and the explicit fallback error now means evaluator-not-implemented rather than unconfigured. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
+- Continuation iteration 33: Added `src/gguf_runtime_smoke.rs`, an env-gated GGUF backend smoke harness registered only for `#[cfg(all(test, feature = "gguf"))]`. When `SPECLATIVE_DIFFUSION_GGUF_SMOKE_CONFIG`, `SPECLATIVE_DIFFUSION_GGUF_SMOKE_TOKENIZER`, and `SPECLATIVE_DIFFUSION_GGUF_SMOKE_WEIGHTS` are set, it builds a real GGUF backend bundle from those assets, checks the weight path binding, and records the current evaluator-not-implemented logits boundary. Without those env vars it returns early, keeping normal verification lightweight. Verified locally with `sfw cargo fmt --check`, `sfw cargo test -q`, lints, and `sfw cargo test -q --all-features`, then synced and verified on `ai@192.168.1.73` with `cargo fmt --check`, `cargo test -q`, and `cargo test -q --all-features`.
 
 ## Continuation Reflection 1
 
@@ -127,12 +128,19 @@ Existing state from `/home/dih/speclative-diffusion/.ralph/speculative-dflash-ru
 - Approach adjustment: Keep `GgufRuntimeLogits` as the only insertion point for real GGUF evaluation; avoid spreading evaluator concerns through `adapter_runtime_backend.rs`.
 - Next priorities: Add an env-gated real GGUF smoke-test harness and choose the concrete evaluator strategy behind `GgufRuntimeLogits`.
 
+## Continuation Reflection 11
+
+- Accomplished: There is now a real-asset GGUF smoke-test path that can be enabled with environment variables, so future evaluator work has a stable integration test hook without committing model files.
+- Working well: The smoke harness is isolated from the large backend file, skipped by default, and still participates in all-feature test compilation. Local and remote verification now pass with 96 default tests and 118 all-feature tests.
+- Blocking or weak spots: The smoke test still asserts the current evaluator-not-implemented error. It does not exercise finite logits until a concrete GGUF evaluator or tensor reader is wired behind `GgufRuntimeLogits`.
+- Approach adjustment: Use the smoke harness as the acceptance boundary for the next evaluator implementation, flipping its assertion from the current error to finite `vocab_size` logits once real compute exists.
+- Next priorities: Choose and wire the concrete GGUF evaluator strategy behind `GgufRuntimeLogits`.
+
 Next priorities:
-1. Add an env-gated real GGUF smoke-test harness that builds a backend from user-provided config/tokenizer/weights paths and records the current not-implemented evaluator boundary.
-2. Wire a concrete GGUF evaluator behind `GgufRuntimeLogits`, then flip the smoke test to assert finite logits and vocab length.
-3. Expand GGUF tensor/data loading only where the first real backend needs it, including dtype/data-offset validation.
-4. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
-5. Add KV-cache-aware target inference shape and batched verification abstractions.
-6. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
-7. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
-8. Keep tests focused, run local and remote verification each implementation iteration, and update the Ralph task file with progress/reflections.
+1. Choose and wire a concrete GGUF evaluator behind `GgufRuntimeLogits`, then flip the env-gated smoke test to assert finite logits and vocab length.
+2. Expand GGUF tensor/data loading only where the first real backend needs it, including dtype/data-offset validation.
+3. Expand tokenizer encode/decode boundaries where needed for backend-specific tokenizers.
+4. Add KV-cache-aware target inference shape and batched verification abstractions.
+5. Add probabilistic/speculative sampling acceptance after greedy path remains stable.
+6. Add custom DFlash-style drafter loading and training/export scaffold, keeping Rust as the inference/control-plane owner.
+7. Keep tests focused, run local and remote verification each implementation iteration, and update the Ralph task file with progress/reflections.
