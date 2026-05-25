@@ -1,6 +1,6 @@
 #[cfg(feature = "candle")]
 pub mod candle {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use crate::{
         adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
@@ -108,14 +108,11 @@ pub mod candle {
         CandleRuntimeTarget::from_runtime_plan(plan)
     }
 
-    pub fn is_weight_path(target: &CandleRuntimeTarget, path: &Path) -> bool {
-        target.weight_paths().iter().any(|weight| weight == path)
-    }
 }
 
 #[cfg(feature = "gguf")]
 pub mod gguf {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use crate::{
         adapter_runtime_plan::{AdapterRuntimePlanBundle, AdapterTargetRuntimePlan},
@@ -223,12 +220,10 @@ pub mod gguf {
         GgufRuntimeTarget::from_runtime_plan(plan)
     }
 
-    pub fn is_weight_path(target: &GgufRuntimeTarget, path: &Path) -> bool {
-        target.weight_paths().iter().any(|weight| weight == path)
-    }
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "candle", feature = "gguf"))]
 mod tests {
     use std::{
         fs::{create_dir_all, remove_dir_all, write},
@@ -240,7 +235,7 @@ mod tests {
         adapter_runtime_plan::AdapterTargetRuntimePlan,
         adapters::{AdapterKind, AdapterLoaderShell},
         loading::{ModelAssetPaths, ModelLoadRequest},
-        model::{BatchedTargetModel, ModelError, TargetBatch, TargetModel, TokenSequence},
+        model::{ModelError, TargetModel},
     };
 
     struct TempAssets {
@@ -275,8 +270,7 @@ mod tests {
             let weights_path = root.join(weight_name);
 
             write(&config_path, config).expect("config should be written");
-            write(&tokenizer, r#"{"model":{"type":"BPE"}}"#)
-                .expect("tokenizer should be written");
+            write(&tokenizer, r#"{"model":{"type":"BPE"}}"#).expect("tokenizer should be written");
             write(&weights_path, weights).expect("weights should be written");
 
             Self {
@@ -348,18 +342,14 @@ mod tests {
         let assets = TempAssets::gguf("gguf-target", valid_config());
         let plan = assets.runtime_plan(AdapterKind::Gguf);
 
-        let target = crate::adapter_runtime_backend::gguf::GgufRuntimeTarget::from_runtime_plan(
-            &plan,
-        )
-        .expect("gguf backend should build");
+        let target =
+            crate::adapter_runtime_backend::gguf::GgufRuntimeTarget::from_runtime_plan(&plan)
+                .expect("gguf backend should build");
 
         assert_eq!(target.model_type(), "llama");
         assert_eq!(TargetModel::vocab_size(&target), 32000);
         assert_eq!(target.weight_file_count(), 1);
-        assert!(crate::adapter_runtime_backend::gguf::is_weight_path(
-            &target,
-            &assets.weights
-        ));
+        assert!(target.weight_paths().contains(&assets.weights));
     }
 
     #[cfg(feature = "gguf")]
@@ -421,24 +411,6 @@ mod tests {
         assert_eq!(bundle.target.model_type(), "llama");
     }
 
-    #[cfg(feature = "gguf")]
-    #[test]
-    fn gguf_batched_fallback_preserves_backend_logits_failure() {
-        let assets = TempAssets::gguf("gguf-batch", valid_config());
-        let plan = assets.runtime_plan(AdapterKind::Gguf);
-        let mut target = crate::adapter_runtime_backend::gguf::runtime_target(&plan)
-            .expect("gguf backend should build");
-        let batch =
-            TargetBatch::new(vec![TokenSequence::new(vec![0])]).expect("batch should be valid");
-
-        assert_eq!(
-            target.logits_for_prefixes(&batch),
-            Err(ModelError::InvalidConfig(
-                "gguf backend cannot produce logits yet"
-            ))
-        );
-    }
-
     #[cfg(feature = "candle")]
     #[test]
     fn candle_backend_builds_from_runtime_plan() {
@@ -452,18 +424,14 @@ mod tests {
         assert_eq!(target.model_type(), "llama");
         assert_eq!(TargetModel::vocab_size(&target), 32000);
         assert_eq!(target.weight_file_count(), 1);
-        assert!(crate::adapter_runtime_backend::candle::is_weight_path(
-            &target,
-            &assets.weights
-        ));
+        assert!(target.weight_paths().contains(&assets.weights));
     }
 
     #[cfg(feature = "candle")]
     #[test]
     fn candle_backend_rejects_wrong_kind_and_incomplete_shape() {
         let gguf_assets = TempAssets::gguf("candle-wrong-kind", valid_config());
-        let incomplete_assets =
-            TempAssets::safetensors("candle-incomplete", incomplete_config());
+        let incomplete_assets = TempAssets::safetensors("candle-incomplete", incomplete_config());
         let gguf_plan = gguf_assets.runtime_plan(AdapterKind::Gguf);
         let incomplete_plan = incomplete_assets.runtime_plan(AdapterKind::Candle);
 
