@@ -107,7 +107,6 @@ pub mod candle {
     pub fn runtime_target(plan: &AdapterTargetRuntimePlan) -> ModelResult<CandleRuntimeTarget> {
         CandleRuntimeTarget::from_runtime_plan(plan)
     }
-
 }
 
 #[cfg(feature = "gguf")]
@@ -219,7 +218,6 @@ pub mod gguf {
     pub fn runtime_target(plan: &AdapterTargetRuntimePlan) -> ModelResult<GgufRuntimeTarget> {
         GgufRuntimeTarget::from_runtime_plan(plan)
     }
-
 }
 
 #[cfg(test)]
