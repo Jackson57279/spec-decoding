@@ -143,18 +143,56 @@ impl AdapterLoadPreflight {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdapterLoaderShell {
+    target_kind: AdapterKind,
+}
+
+impl AdapterLoaderShell {
+    pub fn new(target_kind: AdapterKind) -> Self {
+        Self { target_kind }
+    }
+
+    pub fn target_kind(self) -> AdapterKind {
+        self.target_kind
+    }
+
+    pub fn preflight_target_only(
+        self,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterLoadPreflight> {
+        AdapterLoadPreflight::target_only(self.target_kind, request)
+    }
+
+    pub fn preflight_with_draft(
+        self,
+        draft_kind: AdapterKind,
+        request: &ModelLoadRequest,
+    ) -> ModelResult<AdapterLoadPreflight> {
+        AdapterLoadPreflight::with_draft(self.target_kind, draft_kind, request)
+    }
+}
+
 #[cfg(feature = "candle")]
 pub mod candle {
-    use crate::adapters::AdapterKind;
+    use crate::adapters::{AdapterKind, AdapterLoaderShell};
 
     pub const KIND: AdapterKind = AdapterKind::Candle;
+
+    pub fn loader() -> AdapterLoaderShell {
+        AdapterLoaderShell::new(KIND)
+    }
 }
 
 #[cfg(feature = "gguf")]
 pub mod gguf {
-    use crate::adapters::AdapterKind;
+    use crate::adapters::{AdapterKind, AdapterLoaderShell};
 
     pub const KIND: AdapterKind = AdapterKind::Gguf;
+
+    pub fn loader() -> AdapterLoaderShell {
+        AdapterLoaderShell::new(KIND)
+    }
 }
 
 #[cfg(test)]
@@ -166,7 +204,10 @@ mod tests {
     };
 
     use crate::{
-        adapters::{AdapterKind, AdapterLoadPlan, AdapterLoadPreflight, AdapterModelPlan},
+        adapters::{
+            AdapterKind, AdapterLoadPlan, AdapterLoadPreflight, AdapterLoaderShell,
+            AdapterModelPlan,
+        },
         loading::{ModelAssetPaths, ModelLoadRequest, WeightFormat},
         model::{ModelError, ModelResult},
     };
@@ -362,6 +403,66 @@ mod tests {
                 .weight_format,
             WeightFormat::Gguf
         );
+    }
+
+    #[test]
+    fn adapter_loader_shell_runs_target_preflights() {
+        let target = TempAssets::new("shell-target", "model.safetensors");
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let preflight = AdapterLoaderShell::new(AdapterKind::Candle)
+            .preflight_target_only(&request)
+            .expect("preflight should pass");
+
+        assert_eq!(preflight.target.plan.kind, AdapterKind::Candle);
+        assert_eq!(
+            preflight.target.summary.weight_format,
+            WeightFormat::SafeTensors
+        );
+        assert_eq!(preflight.draft, None);
+    }
+
+    #[test]
+    fn adapter_loader_shell_runs_draft_preflights() {
+        let target = TempAssets::new("shell-target-draft", "model.safetensors");
+        let draft = TempAssets::new("shell-draft", "model.gguf");
+        let request = ModelLoadRequest::with_draft(target.paths(), draft.paths());
+
+        let preflight = AdapterLoaderShell::new(AdapterKind::Candle)
+            .preflight_with_draft(AdapterKind::Gguf, &request)
+            .expect("preflight should pass");
+
+        assert_eq!(preflight.target.plan.kind, AdapterKind::Candle);
+        assert_eq!(
+            preflight.draft.expect("draft preflight").plan.kind,
+            AdapterKind::Gguf
+        );
+    }
+
+    #[cfg(feature = "candle")]
+    #[test]
+    fn candle_feature_exposes_metadata_loader_shell() {
+        let target = TempAssets::new("candle-feature", "model.safetensors");
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let preflight = crate::adapters::candle::loader()
+            .preflight_target_only(&request)
+            .expect("preflight should pass");
+
+        assert_eq!(preflight.target.plan.kind, AdapterKind::Candle);
+    }
+
+    #[cfg(feature = "gguf")]
+    #[test]
+    fn gguf_feature_exposes_metadata_loader_shell() {
+        let target = TempAssets::new("gguf-feature", "model.gguf");
+        let request = ModelLoadRequest::target_only(target.paths());
+
+        let preflight = crate::adapters::gguf::loader()
+            .preflight_target_only(&request)
+            .expect("preflight should pass");
+
+        assert_eq!(preflight.target.plan.kind, AdapterKind::Gguf);
     }
 
     #[test]
