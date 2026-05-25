@@ -1,3 +1,4 @@
+pub mod adapter_loaded;
 pub mod adapters;
 pub mod asset_files;
 pub mod block_draft;
