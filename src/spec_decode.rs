@@ -221,7 +221,10 @@ mod tests {
         assert_eq!(output.stats.target_forwards, 3);
         assert_eq!(output.stats.acceptance_rate(), Some(2.0 / 3.0));
         assert_eq!(output.stats.rejection_rate(), Some(1.0 / 3.0));
-        assert_eq!(output.stats.generated_tokens_per_target_forward(), Some(1.0));
+        assert_eq!(
+            output.stats.generated_tokens_per_target_forward(),
+            Some(1.0)
+        );
         assert_eq!(output.stats.accepted_tokens_per_round(), Some(1.0));
     }
 
