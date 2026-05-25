@@ -1,3 +1,5 @@
+pub mod model;
+
 pub const CRATE_NAME: &str = "speclative-diffusion";
 
 #[cfg(test)]
